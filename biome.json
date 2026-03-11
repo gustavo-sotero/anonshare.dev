@@ -1,0 +1,170 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.4.6/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignoreUnknown": false,
+    "includes": [
+      "**/*.ts",
+      "**/*.tsx",
+      "**/*.js",
+      "**/*.jsx",
+      "**/*.json",
+      "!**/node_modules",
+      "!**/dist",
+      "!**/.output",
+      "!**/.vinxi",
+      "!**/build",
+      "!**/apps/web/src/routeTree.gen.ts",
+      "!**/*.tsbuildinfo"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100,
+    "lineEnding": "lf"
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error"
+      },
+      "suspicious": {
+        "noExplicitAny": "error"
+      },
+      "style": {
+        "noNonNullAssertion": "warn"
+      },
+      "complexity": {
+        "noBannedTypes": "error"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["apps/api/src/**/*.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["../web/**", "../../web/**", "../../../web/**", "../../../../web/**"],
+                    "message": "The API app must not import from apps/web. Share code through packages/ instead."
+                  },
+                  {
+                    "group": [
+                      "../packages/**",
+                      "../../packages/**",
+                      "../../../packages/**",
+                      "../../../../packages/**"
+                    ],
+                    "message": "The API app must not import package source files by relative path. Use the published workspace alias instead."
+                  },
+                  {
+                    "group": [
+                      "../worker/**",
+                      "../../worker/**",
+                      "../../../worker/**",
+                      "../../../../worker/**"
+                    ],
+                    "message": "The API app must not import from apps/worker. Share code through packages/ instead."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/web/src/**/*.ts", "apps/web/src/**/*.tsx", "apps/web/scripts/**/*.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["../api/**", "../../api/**", "../../../api/**", "../../../../api/**"],
+                    "message": "The web app must not import from apps/api. Share code through packages/ instead."
+                  },
+                  {
+                    "group": [
+                      "../packages/**",
+                      "../../packages/**",
+                      "../../../packages/**",
+                      "../../../../packages/**"
+                    ],
+                    "message": "The web app must not import package source files by relative path. Use the published workspace alias instead."
+                  },
+                  {
+                    "group": [
+                      "../worker/**",
+                      "../../worker/**",
+                      "../../../worker/**",
+                      "../../../../worker/**"
+                    ],
+                    "message": "The web app must not import from apps/worker. Share code through packages/ instead."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/worker/src/**/*.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["../api/**", "../../api/**", "../../../api/**", "../../../../api/**"],
+                    "message": "The worker app must not import from apps/api. Share code through packages/ instead."
+                  },
+                  {
+                    "group": [
+                      "../packages/**",
+                      "../../packages/**",
+                      "../../../packages/**",
+                      "../../../../packages/**"
+                    ],
+                    "message": "The worker app must not import package source files by relative path. Use the published workspace alias instead."
+                  },
+                  {
+                    "group": ["../web/**", "../../web/**", "../../../web/**", "../../../../web/**"],
+                    "message": "The worker app must not import from apps/web. Share code through packages/ instead."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "always",
+      "trailingCommas": "none",
+      "arrowParentheses": "always"
+    }
+  }
+}

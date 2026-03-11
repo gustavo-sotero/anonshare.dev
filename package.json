@@ -1,0 +1,31 @@
+{
+  "name": "anonshare",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "bun run --filter '@anonshare/web' dev",
+    "dev:api": "bun run --filter '@anonshare/api' dev",
+    "dev:worker": "bun run --filter '@anonshare/worker' dev",
+    "build": "bun run --filter '*' build",
+    "typecheck": "bun run --filter '*' typecheck",
+    "test": "bun run --filter '*' test",
+    "lint": "biome lint .",
+    "format": "biome format . --write",
+    "check": "biome check . --write",
+    "db:generate": "bun run --filter '@anonshare/infrastructure' db:generate",
+    "db:migrate": "bun run --filter '@anonshare/infrastructure' db:migrate",
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down",
+    "infra:check": "bun --env-file=.env packages/infrastructure/src/scripts/check-local-platform.ts",
+    "infra:reset": "docker compose down -v && docker compose up -d",
+    "verify": "bun run typecheck && bun run lint && bun run test && bun run build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.6",
+    "typescript": "^5.9.3"
+  }
+}

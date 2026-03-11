@@ -1,0 +1,21 @@
+{
+  "name": "@anonshare/api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "start": "bun run dist/index.js",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anonshare/contracts": "workspace:*",
+    "@anonshare/domain": "workspace:*",
+    "@anonshare/infrastructure": "workspace:*",
+    "hono": "^4.12.7"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.10"
+  }
+}

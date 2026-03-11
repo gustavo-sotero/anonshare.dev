@@ -1,0 +1,29 @@
+{
+  "name": "@anonshare/infrastructure",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./db": "./src/db/index.ts",
+    "./redis": "./src/redis/index.ts",
+    "./storage": "./src/storage/index.ts",
+    "./health": "./src/health/index.ts",
+    "./logger": "./src/logger/index.ts",
+    "./config": "./src/config/index.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "bun --env-file=../../.env src/scripts/run-drizzle.ts generate",
+    "db:migrate": "bun --env-file=../../.env src/scripts/run-drizzle.ts migrate"
+  },
+  "dependencies": {
+    "@anonshare/domain": "workspace:*",
+    "drizzle-orm": "^0.45.1",
+    "ioredis": "^5.10.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.10",
+    "drizzle-kit": "^0.31.9"
+  }
+}

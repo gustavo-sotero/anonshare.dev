@@ -1,0 +1,16 @@
+node_modules/
+dist/
+build/
+.output/
+.vinxi/
+*.local
+.env
+.env.*
+!.env.example
+!.env.*.example
+bun.lock
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+coverage/
+.nyc_output/
