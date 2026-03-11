@@ -50,7 +50,7 @@ The storage boundary is Bun-first as well: S3-compatible access goes through Bun
 - `bun run lint`: Biome linting plus import-boundary enforcement.
 - `bun run test`: foundational tests.
 - `bun run build`: bundles the web, API, and worker entrypoints.
-- `bun run db:generate` / `bun run db:migrate`: root Drizzle tooling; during Module 1 they exit cleanly until schema and migration files exist.
+- `bun run db:generate` / `bun run db:migrate`: root Drizzle tooling for schema evolution; see `docs/conventions.md` for the full migration workflow.
 - `bun run verify`: aggregate quality gate used before commits and later in CI.
 
 ## Local troubleshooting order

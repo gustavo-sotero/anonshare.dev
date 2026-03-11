@@ -1,0 +1,3 @@
+ALTER TABLE "files" ADD CONSTRAINT "files_preview_one_time_chk" CHECK (NOT ("files"."one_time_download" AND "files"."allow_preview"));--> statement-breakpoint
+ALTER TABLE "files" ADD CONSTRAINT "files_size_bytes_positive_chk" CHECK ("files"."size_bytes" > 0);--> statement-breakpoint
+ALTER TABLE "files" ADD CONSTRAINT "files_expires_at_window_chk" CHECK ("files"."expires_at" IS NULL OR ("files"."expires_at" >= "files"."uploaded_at" AND "files"."expires_at" <= "files"."uploaded_at" + interval '30 days'));

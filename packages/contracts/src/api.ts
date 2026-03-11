@@ -1,71 +1,54 @@
-import type { FileStatus, ReportReason } from '@anonshare/domain';
-
 // ─── Upload ───────────────────────────────────────────────────────────────────
+// Runtime-validated shapes are in ./schemas/upload.ts; these are the canonical types.
 
-export interface UploadRequest {
-  /** Display name for the file (sanitized, not the raw filename). */
-  filename: string;
-  mimeType: string;
-  sizeBytes: number;
-  oneTime: boolean;
-  allowPreview: boolean;
-  /** ISO-8601 datetime string, or null for no expiration. */
-  expiresAt: string | null;
-}
-
-export interface UploadResponse {
-  shareToken: string;
-  shareUrl: string;
-  expiresAt: string | null;
-}
+export type { UploadRequest, UploadResponse } from './schemas/upload';
 
 // ─── Share page ───────────────────────────────────────────────────────────────
 
-export interface FileMetaResponse {
-  shareToken: string;
-  filename: string;
-  mimeType: string;
-  sizeBytes: number;
-  status: FileStatus;
-  oneTime: boolean;
-  allowPreview: boolean;
-  expiresAt: string | null;
-  createdAt: string;
-}
+export type { FileMetaResponse, ShareTokenParams } from './schemas/share';
+
+// ─── Download ────────────────────────────────────────────────────────────────
+
+export type {
+  BlockedAccessResponse,
+  DownloadUrlResponse,
+  PreviewUrlResponse
+} from './schemas/share';
 
 // ─── Report ───────────────────────────────────────────────────────────────────
+// Runtime-validated shapes are in ./schemas/report.ts
 
-export interface ReportRequest {
-  reason: ReportReason;
-  message?: string;
-}
-
-export interface ReportResponse {
-  id: string;
-  createdAt: string;
-}
+export type { ReportRequest, ReportResponse } from './schemas/report';
 
 // ─── Error envelope ──────────────────────────────────────────────────────────
+// Defined in ./errors.ts alongside the error code registry
 
-export interface ApiError {
-  code: string;
-  message: string;
-  /** Field-level validation errors when applicable (keyed by field path). */
-  details?: Record<string, string>;
-}
+export type {
+  ApiEnvelope,
+  ApiError,
+  ApiErrorCode,
+  ApiErrorEnvelope,
+  ApiSuccessEnvelope
+} from './errors';
+
+// ─── Admin auth/session/moderation ───────────────────────────────────────────
+
+export type {
+  AccessDeniedResponse,
+  AdminLoginCallback,
+  AdminLoginStartResponse,
+  AdminSession,
+  AdminSessionResponse,
+  ModerationAction,
+  ResolveReportAction
+} from './schemas/admin';
 
 // ─── Job payloads (shared between API and worker) ────────────────────────────
+// Runtime-validated shapes are in ./schemas/jobs.ts
 
-export interface ExpireFileJobPayload {
-  fileId: string;
-}
-
-export interface CleanupFileJobPayload {
-  fileId: string;
-  objectKey: string;
-}
-
-export interface ReconcileJobPayload {
-  /** ISO-8601 datetime; jobs older than this threshold are considered stale. */
-  olderThan?: string;
-}
+export type {
+  AutoHideFileJobPayload,
+  CleanupFileJobPayload,
+  ExpireFileJobPayload,
+  ReconcileJobPayload
+} from './schemas/jobs';

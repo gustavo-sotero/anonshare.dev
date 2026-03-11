@@ -1,11 +1,33 @@
-export type ReportReason = 'illegal_content' | 'copyright_violation' | 'malware' | 'spam' | 'other';
+export const REPORT_REASON_VALUES = [
+  'illegal_content',
+  'copyright_violation',
+  'malware',
+  'spam',
+  'other'
+] as const;
 
-export type ReportStatus = 'pending' | 'resolved' | 'dismissed';
+export type ReportReason = (typeof REPORT_REASON_VALUES)[number];
+
+export const REPORT_STATUS_VALUES = ['pending', 'resolved', 'dismissed'] as const;
+
+export type ReportStatus = (typeof REPORT_STATUS_VALUES)[number];
 
 export const REPORT_AUTO_HIDE_THRESHOLD_DEFAULT = 3;
 
 export const MAX_FILE_SIZE_BYTES = 256 * 1024 * 1024; // 256 MB
 export const MAX_EXPIRATION_DAYS = 30;
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
+
+export type UploadPolicyValidationIssue = {
+  path: 'allowPreview' | 'expiresAt';
+  message: string;
+};
+
+export type UploadPolicy = {
+  oneTime: boolean;
+  allowPreview: boolean;
+  expiresAt?: Date | null;
+};
 
 export const PREVIEW_ALLOWED_MIME_TYPES = new Set([
   'image/jpeg',
@@ -27,16 +49,64 @@ export function isPreviewSupported(mimeType: string): boolean {
   return PREVIEW_ALLOWED_MIME_TYPES.has(mimeType);
 }
 
+export function getMaxExpirationDate(from: Date = new Date()): Date {
+  return new Date(from.getTime() + MAX_EXPIRATION_DAYS * DAY_IN_MS);
+}
+
+export function validateUploadPolicy(
+  policy: UploadPolicy,
+  now: Date = new Date()
+): { valid: boolean; issues: UploadPolicyValidationIssue[] } {
+  const issues: UploadPolicyValidationIssue[] = [];
+
+  if (policy.oneTime && policy.allowPreview) {
+    issues.push({
+      path: 'allowPreview',
+      message: 'Preview cannot be enabled for one-time download files.'
+    });
+  }
+
+  if (policy.expiresAt) {
+    if (policy.expiresAt.getTime() <= now.getTime()) {
+      issues.push({
+        path: 'expiresAt',
+        message: 'Expiration must be in the future.'
+      });
+    }
+
+    if (policy.expiresAt.getTime() > getMaxExpirationDate(now).getTime()) {
+      issues.push({
+        path: 'expiresAt',
+        message: `Expiration cannot be more than ${MAX_EXPIRATION_DAYS} days from now.`
+      });
+    }
+  }
+
+  return {
+    valid: issues.length === 0,
+    issues
+  };
+}
+
 // One-time download files cannot have preview enabled — PRD §4
 export function validateUploadOptions(opts: { oneTime: boolean; allowPreview: boolean }): {
   valid: boolean;
   reason?: string;
 } {
-  if (opts.oneTime && opts.allowPreview) {
+  const result = validateUploadPolicy({
+    oneTime: opts.oneTime,
+    allowPreview: opts.allowPreview,
+    expiresAt: null
+  });
+
+  if (!result.valid) {
+    const [firstIssue] = result.issues;
+
     return {
       valid: false,
-      reason: 'Preview cannot be enabled for one-time download files.'
+      reason: firstIssue ? firstIssue.message : 'Upload options are invalid.'
     };
   }
+
   return { valid: true };
 }

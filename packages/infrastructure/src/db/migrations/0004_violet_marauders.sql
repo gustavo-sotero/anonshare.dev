@@ -1,0 +1,2 @@
+CREATE INDEX "files_status_uploaded_at_idx" ON "files" USING btree ("status","uploaded_at");--> statement-breakpoint
+ALTER TABLE "files" ADD CONSTRAINT "files_token_format_chk" CHECK ("files"."token" ~ '^[A-Za-z0-9_-]{16,64}$');

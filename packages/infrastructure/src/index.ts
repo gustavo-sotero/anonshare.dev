@@ -1,6 +1,7 @@
 export * from './config/index';
 export type { Db } from './db/index';
 export { createDb } from './db/index';
+export * from './db/schema/index';
 export type {
   DependencyHealthName,
   DependencyHealthResult,

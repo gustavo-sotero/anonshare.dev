@@ -253,3 +253,5 @@ export function validateWorkerEnv(): ValidatedWorkerConfig {
     storageSecretAccessKey: storage.secretAccessKey()
   };
 }
+
+export * from './system-settings';

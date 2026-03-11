@@ -41,6 +41,21 @@ This document consolidates the working conventions established in Module 1 so la
 - `bun run verify` is the root quality gate before merging or handing off work.
 - `bun run db:generate` and `bun run db:migrate` are the only supported entrypoints for Drizzle tooling.
 
+## Database Evolution
+
+To add a new migration after changing a schema file:
+
+1. Modify the relevant table file(s) in `packages/infrastructure/src/db/schema/`.
+2. Run `bun run db:generate` — Drizzle compares the schema against the migration history and appends a new numbered `.sql` file in `packages/infrastructure/src/db/migrations/`.
+3. Review the generated `.sql` file before committing; ensure it reflects only the intended change.
+4. Commit both the schema change and the generated migration file in the same commit.
+5. Run `bun run db:migrate` (with a running database) to apply the migration.
+
+Additional rules:
+- Never edit a previously committed `.sql` migration file; create a new one instead.
+- Never delete migrations from the `meta/` directory — Drizzle uses the journal to detect drift.
+- The seed script (`bun run db:seed`) is idempotent and can be re-run safely after schema changes to refresh operational defaults.
+
 ## Module Boundaries
 
 - Module 1 establishes topology, bootstrap, shared infrastructure, and governance only.
