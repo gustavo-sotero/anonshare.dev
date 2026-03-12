@@ -18,5 +18,10 @@ export {
 export type { LogContext } from './logger/index';
 export { logger } from './logger/index';
 export { closeRedisClient, getRedisClient } from './redis/index';
-export type { StorageObject } from './storage/index';
-export { storageAdapter } from './storage/index';
+export type {
+  StorageAdapter,
+  StorageObject,
+  StorageSignedUrlMethod,
+  StorageSignedUrlOptions
+} from './storage/index';
+export { createStorageAdapter, StorageError, storageAdapter } from './storage/index';

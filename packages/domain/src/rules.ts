@@ -45,8 +45,21 @@ export const PREVIEW_ALLOWED_MIME_TYPES = new Set([
   'text/markdown'
 ]);
 
+export function normalizeMimeType(mimeType: string): string {
+  const segments = mimeType
+    .trim()
+    .toLowerCase()
+    .split(';')
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .map((segment, index) => (index === 0 ? segment : segment.replace(/\s*=\s*/g, '=')));
+
+  return segments.join(';');
+}
+
 export function isPreviewSupported(mimeType: string): boolean {
-  return PREVIEW_ALLOWED_MIME_TYPES.has(mimeType);
+  const [baseMimeType] = normalizeMimeType(mimeType).split(';');
+  return baseMimeType ? PREVIEW_ALLOWED_MIME_TYPES.has(baseMimeType) : false;
 }
 
 export function getMaxExpirationDate(from: Date = new Date()): Date {

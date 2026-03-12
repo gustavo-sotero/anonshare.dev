@@ -13,6 +13,7 @@
     "@anonshare/contracts": "workspace:*",
     "@anonshare/domain": "workspace:*",
     "@anonshare/infrastructure": "workspace:*",
+    "drizzle-orm": "^0.45.1",
     "hono": "^4.12.7"
   },
   "devDependencies": {

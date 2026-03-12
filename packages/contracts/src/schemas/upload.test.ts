@@ -103,6 +103,46 @@ describe('uploadRequestSchema', () => {
     const result = uploadRequestSchema.safeParse(withoutFilename);
     expect(result.success).toBe(false);
   });
+
+  test('accepts MIME type with charset parameter', () => {
+    const result = uploadRequestSchema.safeParse({
+      ...base,
+      mimeType: 'text/plain;charset=utf-8'
+    });
+    expect(result.success).toBe(true);
+  });
+
+  test('accepts common binary MIME types', () => {
+    for (const mimeType of [
+      'application/octet-stream',
+      'application/pdf',
+      'image/png',
+      'video/mp4'
+    ]) {
+      const result = uploadRequestSchema.safeParse({ ...base, mimeType });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  test('rejects structurally invalid MIME type', () => {
+    for (const mimeType of ['plaintext', 'text', '/plain', 'te xt/plain']) {
+      const result = uploadRequestSchema.safeParse({ ...base, mimeType });
+      expect(result.success).toBe(false);
+    }
+  });
+
+  test('normalizes MIME type casing and spacing in parsed output', () => {
+    const result = uploadRequestSchema.safeParse({
+      ...base,
+      mimeType: ' Text/Plain; Charset = UTF-8 '
+    });
+
+    expect(result.success).toBe(true);
+
+    if (result.success) {
+      expect(result.data.mimeType).toBe('text/plain;charset=utf-8');
+    }
+  });
 });
 
 describe('uploadResponseSchema', () => {

@@ -1,6 +1,14 @@
-import { MAX_FILE_SIZE_BYTES, validateUploadPolicy } from '@anonshare/domain';
+import { MAX_FILE_SIZE_BYTES, normalizeMimeType, validateUploadPolicy } from '@anonshare/domain';
 import { z } from 'zod';
 import { SHARE_TOKEN_MAX_LENGTH, SHARE_TOKEN_MIN_LENGTH, SHARE_TOKEN_PATTERN } from './constants';
+
+/**
+ * Minimal structural MIME type validator.
+ * Requires at least `type/subtype` and allows optional parameters (e.g. `;charset=utf-8`).
+ * Does not enforce an allowlist — any structurally valid MIME type is accepted.
+ */
+const MIME_TYPE_PATTERN =
+  /^[a-zA-Z0-9][a-zA-Z0-9!#$&\-^_.]*\/[a-zA-Z0-9][a-zA-Z0-9!#$&\-^_.+]*(;[^,]*)?$/;
 
 /**
  * Validates the multipart metadata sent alongside a file upload.
@@ -12,7 +20,12 @@ import { SHARE_TOKEN_MAX_LENGTH, SHARE_TOKEN_MIN_LENGTH, SHARE_TOKEN_PATTERN } f
 export const uploadRequestSchema = z
   .object({
     filename: z.string().min(1).max(512),
-    mimeType: z.string().min(1).max(255),
+    mimeType: z
+      .string()
+      .min(1)
+      .max(255)
+      .transform((mimeType) => normalizeMimeType(mimeType))
+      .pipe(z.string().regex(MIME_TYPE_PATTERN, 'Must be a valid MIME type (e.g. text/plain)')),
     sizeBytes: z.number().int().min(1).max(MAX_FILE_SIZE_BYTES),
     oneTime: z.boolean(),
     allowPreview: z.boolean(),

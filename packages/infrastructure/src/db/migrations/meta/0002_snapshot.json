@@ -203,12 +203,8 @@
           "name": "download_events_file_id_files_id_fk",
           "tableFrom": "download_events",
           "tableTo": "files",
-          "columnsFrom": [
-            "file_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["file_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -556,12 +552,8 @@
           "name": "operational_anomalies_file_id_files_id_fk",
           "tableFrom": "operational_anomalies",
           "tableTo": "files",
-          "columnsFrom": [
-            "file_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["file_id"],
+          "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -709,12 +701,8 @@
           "name": "reports_file_id_files_id_fk",
           "tableFrom": "reports",
           "tableTo": "files",
-          "columnsFrom": [
-            "file_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["file_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -762,12 +750,7 @@
     "public.download_event_type": {
       "name": "download_event_type",
       "schema": "public",
-      "values": [
-        "started",
-        "completed",
-        "failed",
-        "blocked"
-      ]
+      "values": ["started", "completed", "failed", "blocked"]
     },
     "public.file_status": {
       "name": "file_status",
@@ -786,32 +769,17 @@
     "public.operational_anomaly_type": {
       "name": "operational_anomaly_type",
       "schema": "public",
-      "values": [
-        "missing_object",
-        "orphaned_object",
-        "stale_expiration",
-        "failed_cleanup"
-      ]
+      "values": ["missing_object", "orphaned_object", "stale_expiration", "failed_cleanup"]
     },
     "public.report_reason": {
       "name": "report_reason",
       "schema": "public",
-      "values": [
-        "illegal_content",
-        "copyright_violation",
-        "malware",
-        "spam",
-        "other"
-      ]
+      "values": ["illegal_content", "copyright_violation", "malware", "spam", "other"]
     },
     "public.report_status": {
       "name": "report_status",
       "schema": "public",
-      "values": [
-        "pending",
-        "resolved",
-        "dismissed"
-      ]
+      "values": ["pending", "resolved", "dismissed"]
     }
   },
   "schemas": {},

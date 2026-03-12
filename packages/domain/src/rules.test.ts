@@ -4,6 +4,7 @@ import {
   isPreviewSupported,
   MAX_EXPIRATION_DAYS,
   MAX_FILE_SIZE_BYTES,
+  normalizeMimeType,
   PREVIEW_ALLOWED_MIME_TYPES,
   REPORT_REASON_VALUES,
   REPORT_STATUS_VALUES,
@@ -67,10 +68,27 @@ describe('isPreviewSupported', () => {
     expect(isPreviewSupported('')).toBe(false);
   });
 
+  test('normalizes case and parameters before preview allowlist checks', () => {
+    expect(isPreviewSupported('Text/Plain; Charset = UTF-8')).toBe(true);
+    expect(isPreviewSupported('APPLICATION/PDF')).toBe(true);
+  });
+
   test('PREVIEW_ALLOWED_MIME_TYPES contains all supported types', () => {
     for (const mime of supported) {
       expect(PREVIEW_ALLOWED_MIME_TYPES.has(mime)).toBe(true);
     }
+  });
+});
+
+describe('normalizeMimeType', () => {
+  test('normalizes casing and parameter spacing', () => {
+    expect(normalizeMimeType(' Text/Plain; Charset = UTF-8 ; Format = Flowed ')).toBe(
+      'text/plain;charset=utf-8;format=flowed'
+    );
+  });
+
+  test('returns an empty string for whitespace-only values', () => {
+    expect(normalizeMimeType('   ')).toBe('');
   });
 });
 
