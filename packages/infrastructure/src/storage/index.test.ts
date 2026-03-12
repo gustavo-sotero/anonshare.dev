@@ -120,6 +120,62 @@ describe('createStorageAdapter', () => {
     expect(captured).toEqual({ expiresIn: 300, method: 'PUT' });
   });
 
+  test('lists objects with prefix filtering and pagination cursor', async () => {
+    let capturedOptions:
+      | {
+          prefix?: string;
+          maxKeys?: number;
+          startAfter?: string;
+        }
+      | undefined;
+
+    const adapter = createStorageAdapter({
+      getFile: () => makeFile(),
+      listObjects: async (options) => {
+        capturedOptions = options;
+        return {
+          contents: [
+            {
+              key: 'objects/a',
+              size: 10,
+              lastModified: new Date('2026-03-12T10:00:00Z'),
+              etag: 'etag-a'
+            },
+            {
+              key: 'objects/b',
+              size: 20,
+              lastModified: new Date('2026-03-12T10:05:00Z'),
+              etag: 'etag-b'
+            }
+          ],
+          isTruncated: true
+        };
+      }
+    });
+
+    const result = await adapter.list({ prefix: 'objects/', maxKeys: 2, startAfter: 'objects/0' });
+
+    expect(capturedOptions).toEqual({ prefix: 'objects/', maxKeys: 2, startAfter: 'objects/0' });
+    expect(result).toEqual({
+      objects: [
+        {
+          key: 'objects/a',
+          size: 10,
+          lastModified: new Date('2026-03-12T10:00:00Z'),
+          etag: 'etag-a'
+        },
+        {
+          key: 'objects/b',
+          size: 20,
+          lastModified: new Date('2026-03-12T10:05:00Z'),
+          etag: 'etag-b'
+        }
+      ],
+      isTruncated: true,
+      nextStartAfter: 'objects/b'
+    });
+  });
+
   test('presignedGet delegates to GET signed URLs', async () => {
     let capturedMethod: string | undefined;
 

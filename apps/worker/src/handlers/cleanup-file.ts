@@ -4,7 +4,7 @@ import { files, operationalAnomalies } from '@anonshare/infrastructure/db/schema
 import { logger } from '@anonshare/infrastructure/logger';
 import { StorageError, type storageAdapter } from '@anonshare/infrastructure/storage';
 import type { Job } from 'bullmq';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 
 export type CleanupFileHandlerDeps = {
   db: ReturnType<typeof createDb>;
@@ -123,12 +123,25 @@ async function recordFailedCleanupAnomaly(
   err: unknown
 ): Promise<void> {
   try {
+    const existing = await db.query.operationalAnomalies.findFirst({
+      where: and(
+        eq(operationalAnomalies.type, 'failed_cleanup'),
+        eq(operationalAnomalies.fileId, fileId),
+        isNull(operationalAnomalies.resolvedAt)
+      )
+    });
+
+    if (existing) {
+      return;
+    }
+
     await db.insert(operationalAnomalies).values({
       type: 'failed_cleanup',
       fileId,
       details: {
         objectKey,
-        error: err instanceof Error ? err.message : String(err)
+        error: err instanceof Error ? err.message : String(err),
+        severity: 'high'
       }
     });
   } catch (anomalyErr) {

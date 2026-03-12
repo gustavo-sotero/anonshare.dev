@@ -37,6 +37,11 @@ type StorageStubs = {
   createSignedUrlShouldThrow?: boolean;
 };
 
+type QueueStubs = {
+  capturedCleanupEnqueues?: Array<{ fileId: string; objectKey: string; delayMs?: number }>;
+  cleanupShouldThrow?: boolean;
+};
+
 function makeFileRow(overrides: Partial<FileRow> = {}): FileRow {
   return {
     id: 'file-uuid-1',
@@ -55,8 +60,15 @@ function makeFileRow(overrides: Partial<FileRow> = {}): FileRow {
   };
 }
 
-function makeMockDeps(db: DbStubs = {}, storage: StorageStubs = {}): ShareRouterDeps {
+function makeMockDeps(
+  db: DbStubs = {},
+  storage: StorageStubs = {},
+  queue: QueueStubs = {}
+): ShareRouterDeps {
   let updateCallCount = 0;
+  const capturedCleanupEnqueues: Array<{ fileId: string; objectKey: string; delayMs?: number }> =
+    [];
+  queue.capturedCleanupEnqueues = capturedCleanupEnqueues;
 
   return {
     getDb: () =>
@@ -107,6 +119,18 @@ function makeMockDeps(db: DbStubs = {}, storage: StorageStubs = {}): ShareRouter
         if (storage.createSignedUrlShouldThrow) throw new Error('Storage presign failed');
         return storage.signedUrl ?? 'https://storage.example.com/presigned-url?sig=abc123';
       }
+    },
+
+    enqueueCleanupFile: async (fileId: string, objectKey: string, delayMs?: number) => {
+      if (queue.cleanupShouldThrow) {
+        throw new Error('Cleanup queue unavailable');
+      }
+
+      capturedCleanupEnqueues.push({
+        fileId,
+        objectKey,
+        ...(delayMs === undefined ? {} : { delayMs })
+      });
     }
   };
 }
@@ -431,13 +455,15 @@ describe('GET /share/:token/download — standard download', () => {
 
 describe('GET /share/:token/download — one-time consumption', () => {
   test('issues URL and transitions to consumed when UPDATE succeeds', async () => {
+    const queue: QueueStubs = {};
     const app = buildApp(
       makeMockDeps(
         {
           findFirst: makeFileRow({ oneTimeDownload: true, status: 'active' }),
           updateReturn: [{ id: 'file-uuid-1', objectKey: 'objects/test-uuid' }]
         },
-        { signedUrl: 'https://storage.example.com/one-time-dl' }
+        { signedUrl: 'https://storage.example.com/one-time-dl' },
+        queue
       )
     );
     const res = await request(app, '/share/Abc123defghijkl012/download');
@@ -446,6 +472,98 @@ describe('GET /share/:token/download — one-time consumption', () => {
     const body = (await res.json()) as { ok: boolean; data: { url: string } };
     expect(body.ok).toBe(true);
     expect(body.data.url).toBe('https://storage.example.com/one-time-dl');
+    expect(queue.capturedCleanupEnqueues).toEqual([
+      {
+        fileId: 'file-uuid-1',
+        objectKey: 'objects/test-uuid',
+        delayMs: 16 * 60 * 1_000
+      }
+    ]);
+  });
+
+  test('rolls one-time status back when presigning fails after consumption', async () => {
+    const updateSets: unknown[] = [];
+    const app = buildApp(
+      makeMockDeps(
+        {
+          findFirst: makeFileRow({ oneTimeDownload: true, status: 'active' }),
+          updateSequence: [
+            [{ id: 'file-uuid-1', objectKey: 'objects/test-uuid' }],
+            [{ id: 'file-uuid-1' }]
+          ],
+          onUpdateSet: (values) => {
+            updateSets.push(values);
+          }
+        },
+        { createSignedUrlShouldThrow: true }
+      )
+    );
+
+    const res = await request(app, '/share/Abc123defghijkl012/download');
+
+    expect(res.status).toBe(500);
+    expect(updateSets).toEqual([
+      { status: 'consumed', consumedAt: expect.any(Date) },
+      { status: 'active', consumedAt: null }
+    ]);
+  });
+
+  test('still returns 500 when rollback fails after one-time presign error', async () => {
+    const updateSets: unknown[] = [];
+    const app = buildApp(
+      makeMockDeps(
+        {
+          findFirst: makeFileRow({ oneTimeDownload: true, status: 'active' }),
+          updateSequence: [[{ id: 'file-uuid-1', objectKey: 'objects/test-uuid' }]],
+          updateShouldThrowAtCall: [2],
+          onUpdateSet: (values) => {
+            updateSets.push(values);
+          }
+        },
+        { createSignedUrlShouldThrow: true }
+      )
+    );
+
+    const res = await request(app, '/share/Abc123defghijkl012/download');
+
+    expect(res.status).toBe(500);
+    expect(updateSets).toEqual([
+      { status: 'consumed', consumedAt: expect.any(Date) },
+      { status: 'active', consumedAt: null }
+    ]);
+  });
+
+  test('does not enqueue cleanup for standard downloads', async () => {
+    const queue: QueueStubs = {};
+    const app = buildApp(
+      makeMockDeps(
+        { findFirst: makeFileRow({ oneTimeDownload: false, status: 'active' }) },
+        { signedUrl: 'https://storage.example.com/standard-dl' },
+        queue
+      )
+    );
+
+    const res = await request(app, '/share/Abc123defghijkl012/download');
+
+    expect(res.status).toBe(200);
+    expect(queue.capturedCleanupEnqueues).toHaveLength(0);
+  });
+
+  test('still returns 200 when cleanup enqueue fails after one-time delivery', async () => {
+    const app = buildApp(
+      makeMockDeps(
+        {
+          findFirst: makeFileRow({ oneTimeDownload: true, status: 'active' }),
+          updateReturn: [{ id: 'file-uuid-1', objectKey: 'objects/test-uuid' }]
+        },
+        { signedUrl: 'https://storage.example.com/one-time-dl' },
+        { cleanupShouldThrow: true }
+      )
+    );
+
+    const res = await request(app, '/share/Abc123defghijkl012/download');
+
+    expect(res.status).toBe(200);
   });
 
   test('returns 410 FILE_CONSUMED when UPDATE matches 0 rows (race lost)', async () => {

@@ -1,6 +1,12 @@
-import { FILE_MODERATION_ACTION_VALUES, REPORT_RESOLUTION_ACTION_VALUES } from '@anonshare/domain';
+import {
+  FILE_MODERATION_ACTION_VALUES,
+  OPERATIONAL_ANOMALY_SEVERITY_VALUES,
+  OPERATIONAL_ANOMALY_TYPE_VALUES,
+  REPORT_RESOLUTION_ACTION_VALUES
+} from '@anonshare/domain';
 import { z } from 'zod';
 import { GITHUB_ID_MAX_LENGTH, GITHUB_LOGIN_MAX_LENGTH } from './constants';
+import { QUEUE_CLEANUP_FILE, QUEUE_EXPIRE_FILE, QUEUE_RECONCILE } from './jobs';
 
 /**
  * Schemas for admin-only moderation actions and dashboard operations.
@@ -64,3 +70,56 @@ export const adminLoginCallbackSchema = z.object({
 });
 
 export type AdminLoginCallback = z.infer<typeof adminLoginCallbackSchema>;
+
+export const operationalAnomalySeveritySchema = z.enum(OPERATIONAL_ANOMALY_SEVERITY_VALUES);
+
+export type OperationalAnomalySeverity = z.infer<typeof operationalAnomalySeveritySchema>;
+
+export const operationalAnomalySummarySchema = z.object({
+  id: z.uuid(),
+  type: z.enum(OPERATIONAL_ANOMALY_TYPE_VALUES),
+  severity: operationalAnomalySeveritySchema,
+  fileId: z.uuid().nullable(),
+  details: z.record(z.string(), z.unknown()).nullable(),
+  detectedAt: z.iso.datetime(),
+  resolvedAt: z.iso.datetime().nullable(),
+  resolution: z.string().nullable()
+});
+
+export type OperationalAnomalySummary = z.infer<typeof operationalAnomalySummarySchema>;
+
+export const queueHealthSnapshotSchema = z.object({
+  queue: z.enum([QUEUE_EXPIRE_FILE, QUEUE_CLEANUP_FILE, QUEUE_RECONCILE]),
+  status: z.enum(['healthy', 'degraded']),
+  lastError: z.string().min(1).nullable(),
+  waiting: z.int().min(0),
+  active: z.int().min(0),
+  delayed: z.int().min(0),
+  failed: z.int().min(0),
+  completed: z.int().min(0),
+  lagMs: z.int().min(0),
+  processing: z.object({
+    sampledJobs: z.int().min(0),
+    retriedJobs: z.int().min(0),
+    retryRate: z.number().min(0).max(1),
+    avgAttemptsMade: z.number().min(0),
+    avgDurationMs: z.int().min(0).nullable(),
+    p95DurationMs: z.int().min(0).nullable()
+  })
+});
+
+export type QueueHealthSnapshot = z.infer<typeof queueHealthSnapshotSchema>;
+
+export const adminLifecycleStatsResponseSchema = z.object({
+  openAnomaliesTotal: z.int().min(0),
+  openAnomaliesByType: z.record(z.string(), z.int().min(0)),
+  queueHealth: z.array(queueHealthSnapshotSchema)
+});
+
+export type AdminLifecycleStatsResponse = z.infer<typeof adminLifecycleStatsResponseSchema>;
+
+export const adminAnomaliesResponseSchema = z.object({
+  anomalies: z.array(operationalAnomalySummarySchema)
+});
+
+export type AdminAnomaliesResponse = z.infer<typeof adminAnomaliesResponseSchema>;

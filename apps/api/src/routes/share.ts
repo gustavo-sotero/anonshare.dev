@@ -1,4 +1,8 @@
-import { API_ERROR_CODES, shareTokenParamsSchema } from '@anonshare/contracts';
+import {
+  API_ERROR_CODES,
+  ONE_TIME_DOWNLOAD_CLEANUP_DELAY_MS,
+  shareTokenParamsSchema
+} from '@anonshare/contracts';
 import {
   getUnavailabilityMessage,
   isPreviewSupported,
@@ -11,6 +15,7 @@ import type { StorageSignedUrlOptions } from '@anonshare/infrastructure/storage'
 import { StorageError, storageAdapter } from '@anonshare/infrastructure/storage';
 import { and, eq, inArray } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { enqueueCleanupFileJob } from '../queues';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const DOWNLOAD_URL_EXPIRY_SECONDS = 900; // 15 minutes
@@ -96,6 +101,7 @@ type ShareStorage = {
 export type ShareRouterDeps = {
   getDb?: () => ReturnType<typeof createDb>;
   storage?: ShareStorage;
+  enqueueCleanupFile?: (fileId: string, objectKey: string, delayMs?: number) => Promise<void>;
 };
 
 // ─── Router factory ───────────────────────────────────────────────────────────
@@ -103,6 +109,7 @@ export type ShareRouterDeps = {
 export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
   const resolveDb = deps.getDb ?? getDb;
   const resolveStorage: ShareStorage = deps.storage ?? storageAdapter;
+  const resolveEnqueueCleanupFile = deps.enqueueCleanupFile ?? enqueueCleanupFileJob;
 
   const router = new Hono();
 
@@ -445,6 +452,26 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
       oneTime: file.oneTimeDownload,
       source: 'presign_issued'
     });
+
+    if (oneTimeReservation) {
+      try {
+        await resolveEnqueueCleanupFile(
+          oneTimeReservation.fileId,
+          objectKey,
+          ONE_TIME_DOWNLOAD_CLEANUP_DELAY_MS
+        );
+      } catch (err) {
+        logger.warn('One-time cleanup enqueue failed; reconciler will repair', {
+          event: 'download_completed',
+          requestId,
+          actor: 'anonymous',
+          entity: { type: 'file', id: token },
+          outcome: 'failure',
+          reason: 'cleanup_enqueue_failed',
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
 
     return c.json({ ok: true as const, data: { url: downloadUrl, expiresAt } }, 200);
   });

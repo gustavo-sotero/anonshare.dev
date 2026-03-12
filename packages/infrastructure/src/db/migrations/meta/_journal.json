@@ -43,6 +43,13 @@
       "when": 1773258316158,
       "tag": "0005_tranquil_proudstar",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1773341205823,
+      "tag": "0006_rare_whistler",
+      "breakpoints": true
     }
   ]
 }

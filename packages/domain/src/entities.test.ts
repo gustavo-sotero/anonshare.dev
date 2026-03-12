@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   DOWNLOAD_EVENT_TYPE_VALUES,
   FILE_MODERATION_ACTION_VALUES,
+  OPERATIONAL_ANOMALY_SEVERITY_VALUES,
   OPERATIONAL_ANOMALY_TYPE_VALUES,
   REPORT_RESOLUTION_ACTION_VALUES,
   type SharedFile,
@@ -18,8 +19,15 @@ describe('domain entity value registries', () => {
       'missing_object',
       'orphaned_object',
       'stale_expiration',
-      'failed_cleanup'
+      'failed_cleanup',
+      'lifecycle_job_overdue',
+      'lifecycle_job_duplicate',
+      'reconciliation_scan_incomplete'
     ]);
+  });
+
+  test('exports canonical operational anomaly severities', () => {
+    expect(OPERATIONAL_ANOMALY_SEVERITY_VALUES).toEqual(['low', 'medium', 'high']);
   });
 
   test('exports canonical moderation action values', () => {

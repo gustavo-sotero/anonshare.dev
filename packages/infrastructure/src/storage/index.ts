@@ -13,6 +13,36 @@ export type StorageHeadObject = {
   contentLength: number;
 };
 
+export type StorageListOptions = {
+  prefix?: string;
+  maxKeys?: number;
+  startAfter?: string;
+};
+
+export type StorageListObject = {
+  key: string;
+  size: number;
+  lastModified: Date | null;
+  etag: string | null;
+};
+
+export type StorageListResult = {
+  objects: StorageListObject[];
+  isTruncated: boolean;
+  nextStartAfter: string | null;
+};
+
+type StorageListSourceResult = {
+  contents?: Array<{
+    key: string;
+    size?: number;
+    lastModified?: Date | string | null;
+    etag?: string | null;
+    eTag?: string | null;
+  }>;
+  isTruncated?: boolean;
+};
+
 export type StorageSignedUrlMethod = 'GET' | 'PUT' | 'DELETE' | 'HEAD' | 'POST';
 
 export type StorageSignedUrlOptions = {
@@ -42,11 +72,14 @@ type StorageRetryPolicy = {
 
 type CreateStorageAdapterOptions = {
   getFile?: (key: string) => StorageFileLike;
+  listObjects?: (options: StorageListOptions) => Promise<StorageListSourceResult>;
   timeouts?: Partial<StorageTimeouts>;
 };
 
 export interface StorageAdapter {
   checkAccess(): Promise<void>;
+  list(options?: StorageListOptions): Promise<StorageListResult>;
+  listObjects(options?: StorageListOptions): Promise<StorageListResult>;
   put(obj: StorageObject): Promise<void>;
   putObject(obj: StorageObject): Promise<void>;
   get(key: string): Promise<ReadableStream | null>;
@@ -213,6 +246,8 @@ function toWritableBody(body: StorageObject['body']): Uint8Array | Response {
 
 export function createStorageAdapter(options: CreateStorageAdapterOptions = {}): StorageAdapter {
   const getFile = options.getFile ?? getStorageFile;
+  const listProvider: (options: StorageListOptions) => Promise<StorageListSourceResult> =
+    options.listObjects ?? ((listOptions: StorageListOptions) => getS3Client().list(listOptions));
   const timeouts = {
     ...DEFAULT_STORAGE_TIMEOUTS,
     ...options.timeouts
@@ -234,6 +269,39 @@ export function createStorageAdapter(options: CreateStorageAdapterOptions = {}):
         'checkAccess.write'
       );
     }, retryPolicy);
+  }
+
+  async function list(options: StorageListOptions = {}): Promise<StorageListResult> {
+    const normalizedOptions: StorageListOptions = {
+      ...(options.prefix ? { prefix: options.prefix } : {}),
+      ...(typeof options.maxKeys === 'number' ? { maxKeys: options.maxKeys } : {}),
+      ...(options.startAfter ? { startAfter: options.startAfter } : {})
+    };
+
+    try {
+      const result = await withRetries(
+        () => withTimeout(listProvider(normalizedOptions), timeouts.metaMs, 'listObjects'),
+        retryPolicy
+      );
+
+      const objects = (result.contents ?? []).map((object) => ({
+        key: object.key,
+        size: object.size ?? 0,
+        lastModified:
+          typeof object.lastModified === 'string'
+            ? new Date(object.lastModified)
+            : (object.lastModified ?? null),
+        etag: object.etag ?? object.eTag ?? null
+      }));
+
+      return {
+        objects,
+        isTruncated: result.isTruncated ?? false,
+        nextStartAfter: result.isTruncated ? (objects.at(-1)?.key ?? null) : null
+      };
+    } catch (err) {
+      throw classifyStorageError(err);
+    }
   }
 
   async function put(obj: StorageObject): Promise<void> {
@@ -363,6 +431,8 @@ export function createStorageAdapter(options: CreateStorageAdapterOptions = {}):
 
   return {
     checkAccess,
+    list,
+    listObjects: list,
     put,
     putObject: put,
     get,

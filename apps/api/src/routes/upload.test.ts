@@ -25,11 +25,20 @@ type StorageStubs = {
   capturePut?: (obj: unknown) => void;
 };
 
+type QueueStubs = {
+  captureExpireEnqueue?: (fileId: string, delayMs: number) => void;
+  enqueueExpireShouldThrow?: boolean;
+};
+
 /**
  * Builds minimal injectable deps for the upload router.
  * The DB double implements only the Drizzle chain surface called by the handler.
  */
-function makeMockDeps(db: DbStubs = {}, storage: StorageStubs = {}): UploadRouterDeps {
+function makeMockDeps(
+  db: DbStubs = {},
+  storage: StorageStubs = {},
+  queue: QueueStubs = {}
+): UploadRouterDeps {
   const insertReturn = db.insertReturn ?? [{ id: 'test-file-id' }];
   const updateReturn = db.updateReturn ?? [{ id: insertReturn[0]?.id ?? 'test-file-id' }];
   let lastPut: {
@@ -99,6 +108,14 @@ function makeMockDeps(db: DbStubs = {}, storage: StorageStubs = {}): UploadRoute
       delete: async (key: string) => {
         storage.captureDelete?.(key);
         if (storage.deleteShouldThrow) throw new Error('Storage delete failed');
+      }
+    },
+
+    enqueueExpireFile: async (fileId: string, delayMs: number) => {
+      queue.captureExpireEnqueue?.(fileId, delayMs);
+
+      if (queue.enqueueExpireShouldThrow) {
+        throw new Error('Expire queue unavailable');
       }
     }
   };
@@ -289,6 +306,39 @@ describe('POST /upload — successful upload lifecycle', () => {
     const body = await response.json();
     expect(typeof body.data.expiresAt).toBe('string');
     expect(body.data.expiresAt).not.toBeNull();
+  });
+
+  test('enqueues expire-file after activation when expiresAt is in the future', async () => {
+    const captured: Array<{ fileId: string; delayMs: number }> = [];
+    const app = buildApp(
+      makeMockDeps(
+        {},
+        {},
+        {
+          captureExpireEnqueue: (fileId, delayMs) => {
+            captured.push({ fileId, delayMs });
+          }
+        }
+      )
+    );
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+
+    const response = await postUpload(app, { file: makeFile(), expiresAt });
+
+    expect(response.status).toBe(201);
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.fileId).toBe('test-file-id');
+    expect(captured[0]?.delayMs).toBeGreaterThan(29 * 60 * 1000);
+    expect(captured[0]?.delayMs).toBeLessThanOrEqual(30 * 60 * 1000);
+  });
+
+  test('still returns 201 when expire-file enqueue fails after activation', async () => {
+    const app = buildApp(makeMockDeps({}, {}, { enqueueExpireShouldThrow: true }));
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+
+    const response = await postUpload(app, { file: makeFile(), expiresAt });
+
+    expect(response.status).toBe(201);
   });
 
   test('produces a unique share token for each upload', async () => {

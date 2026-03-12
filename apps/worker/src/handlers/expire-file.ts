@@ -1,4 +1,8 @@
-import type { CleanupFileJobPayload, ExpireFileJobPayload } from '@anonshare/contracts';
+import {
+  type CleanupFileJobPayload,
+  type ExpireFileJobPayload,
+  LIFECYCLE_JOB_RETENTION
+} from '@anonshare/contracts';
 import type { createDb } from '@anonshare/infrastructure/db';
 import { files } from '@anonshare/infrastructure/db/schema';
 import { logger } from '@anonshare/infrastructure/logger';
@@ -9,6 +13,23 @@ export type ExpireFileHandlerDeps = {
   db: ReturnType<typeof createDb>;
   cleanupQueue: Queue<CleanupFileJobPayload>;
 };
+
+async function enqueueCleanupJob(
+  cleanupQueue: Queue<CleanupFileJobPayload>,
+  fileId: string,
+  objectKey: string
+): Promise<void> {
+  await cleanupQueue.add(
+    'cleanup-file',
+    { fileId, objectKey },
+    {
+      jobId: `cleanup:${fileId}`,
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 1_000 },
+      ...LIFECYCLE_JOB_RETENTION
+    }
+  );
+}
 
 /**
  * Factory that produces a BullMQ processor function for expire-file jobs.
@@ -40,7 +61,23 @@ export function makeHandleExpireFile(deps: ExpireFileHandlerDeps) {
       return;
     }
 
-    // Idempotent: already in a terminal or moderated state
+    // If a prior attempt already transitioned the file to expired but failed
+    // while enqueueing cleanup, retries must still try to enqueue cleanup.
+    if (file.status === 'expired') {
+      await enqueueCleanupJob(cleanupQueue, fileId, file.objectKey);
+
+      logger.info('expire-file: file already expired, ensured cleanup enqueue', {
+        event: 'file.expired',
+        actor: 'worker',
+        entity: { type: 'file', id: fileId },
+        outcome: 'success',
+        reason: 'already_expired_cleanup_enqueued'
+      });
+      return;
+    }
+
+    // Idempotent: already in a terminal or moderated state that should not be
+    // changed by the expire-file worker.
     if (file.status !== 'active' && file.status !== 'expiring') {
       logger.info('expire-file: file not in expirable state, skipping', {
         event: 'file.expired',
@@ -97,14 +134,6 @@ export function makeHandleExpireFile(deps: ExpireFileHandlerDeps) {
 
     // Schedule cleanup with a deduplication jobId to prevent double-deletion
     // even if this handler is replayed.
-    await cleanupQueue.add(
-      'cleanup-file',
-      { fileId, objectKey: file.objectKey },
-      {
-        jobId: `cleanup:${fileId}`,
-        attempts: 5,
-        backoff: { type: 'exponential', delay: 1_000 }
-      }
-    );
+    await enqueueCleanupJob(cleanupQueue, fileId, file.objectKey);
   };
 }

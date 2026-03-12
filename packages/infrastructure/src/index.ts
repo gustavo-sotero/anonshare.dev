@@ -20,6 +20,9 @@ export { logger } from './logger/index';
 export { closeRedisClient, getRedisClient } from './redis/index';
 export type {
   StorageAdapter,
+  StorageListObject,
+  StorageListOptions,
+  StorageListResult,
   StorageObject,
   StorageSignedUrlMethod,
   StorageSignedUrlOptions

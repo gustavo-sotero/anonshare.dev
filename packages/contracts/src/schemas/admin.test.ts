@@ -1,10 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import {
   accessDeniedResponseSchema,
+  adminAnomaliesResponseSchema,
+  adminLifecycleStatsResponseSchema,
   adminLoginCallbackSchema,
   adminLoginStartResponseSchema,
   adminSessionResponseSchema,
   moderationActionSchema,
+  operationalAnomalySummarySchema,
+  queueHealthSnapshotSchema,
   resolveReportSchema
 } from './admin';
 
@@ -180,5 +184,117 @@ describe('accessDeniedResponseSchema', () => {
     });
 
     expect(result.success).toBe(false);
+  });
+});
+
+describe('operational anomaly admin schemas', () => {
+  test('accepts an operational anomaly summary with severity and context', () => {
+    const result = operationalAnomalySummarySchema.safeParse({
+      id: crypto.randomUUID(),
+      type: 'lifecycle_job_duplicate',
+      severity: 'medium',
+      fileId: crypto.randomUUID(),
+      details: {
+        queue: 'expire-file',
+        duplicateCount: 2,
+        source: 'reconcile'
+      },
+      detectedAt: new Date().toISOString(),
+      resolvedAt: null,
+      resolution: null
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  test('rejects an anomaly summary with unsupported severity', () => {
+    const result = operationalAnomalySummarySchema.safeParse({
+      id: crypto.randomUUID(),
+      type: 'missing_object',
+      severity: 'critical',
+      fileId: crypto.randomUUID(),
+      details: {},
+      detectedAt: new Date().toISOString(),
+      resolvedAt: null,
+      resolution: null
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  test('accepts queue health snapshots for lifecycle queues', () => {
+    const result = queueHealthSnapshotSchema.safeParse({
+      queue: 'cleanup-file',
+      status: 'healthy',
+      lastError: null,
+      waiting: 0,
+      active: 1,
+      delayed: 2,
+      failed: 0,
+      completed: 10,
+      lagMs: 250,
+      processing: {
+        sampledJobs: 25,
+        retriedJobs: 4,
+        retryRate: 0.16,
+        avgAttemptsMade: 0.2,
+        avgDurationMs: 45,
+        p95DurationMs: 90
+      }
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  test('accepts admin lifecycle stats response', () => {
+    const result = adminLifecycleStatsResponseSchema.safeParse({
+      openAnomaliesTotal: 2,
+      openAnomaliesByType: {
+        missing_object: 1,
+        lifecycle_job_overdue: 1
+      },
+      queueHealth: [
+        {
+          queue: 'expire-file',
+          status: 'healthy',
+          lastError: null,
+          waiting: 0,
+          active: 0,
+          delayed: 3,
+          failed: 0,
+          completed: 11,
+          lagMs: 0,
+          processing: {
+            sampledJobs: 11,
+            retriedJobs: 0,
+            retryRate: 0,
+            avgAttemptsMade: 0,
+            avgDurationMs: 12,
+            p95DurationMs: 20
+          }
+        }
+      ]
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  test('accepts admin anomalies response', () => {
+    const result = adminAnomaliesResponseSchema.safeParse({
+      anomalies: [
+        {
+          id: crypto.randomUUID(),
+          type: 'failed_cleanup',
+          severity: 'high',
+          fileId: crypto.randomUUID(),
+          details: { objectKey: 'objects/example' },
+          detectedAt: new Date().toISOString(),
+          resolvedAt: null,
+          resolution: null
+        }
+      ]
+    });
+
+    expect(result.success).toBe(true);
   });
 });

@@ -14,6 +14,20 @@ import { makeHandleExpireFile } from './handlers/expire-file';
 import { makeHandleReconcile } from './handlers/reconcile';
 import { QUEUE_CLEANUP_FILE, QUEUE_EXPIRE_FILE, QUEUE_RECONCILE } from './queues';
 
+function getJobLagMs(job: { timestamp?: number; delay?: number; processedOn?: number }): number {
+  const scheduledAt = (job.timestamp ?? Date.now()) + (job.delay ?? 0);
+  const processedAt = job.processedOn ?? Date.now();
+  return Math.max(0, processedAt - scheduledAt);
+}
+
+function getJobDurationMs(job: { processedOn?: number; finishedOn?: number }): number | null {
+  if (typeof job.processedOn !== 'number' || typeof job.finishedOn !== 'number') {
+    return null;
+  }
+
+  return Math.max(0, job.finishedOn - job.processedOn);
+}
+
 // ─── Boot ────────────────────────────────────────────────────────────────────
 
 logger.info('Worker starting', { actor: 'worker', event: 'worker_start', outcome: 'success' });
@@ -53,6 +67,15 @@ const reconcileWorker = new Worker(
   { connection, concurrency: 1 }
 );
 
+await Promise.all([
+  expireQueue.waitUntilReady(),
+  cleanupQueue.waitUntilReady(),
+  reconcileQueue.waitUntilReady(),
+  expireWorker.waitUntilReady(),
+  cleanupWorker.waitUntilReady(),
+  reconcileWorker.waitUntilReady()
+]);
+
 // ─── Recurring reconciliation scheduler ──────────────────────────────────────
 
 await reconcileQueue.upsertJobScheduler(
@@ -71,12 +94,31 @@ logger.info('Reconciliation scheduler registered', {
 // ─── Error logging ────────────────────────────────────────────────────────────
 
 for (const worker of [expireWorker, cleanupWorker, reconcileWorker]) {
+  worker.on('completed', (job) => {
+    logger.info('Job completed', {
+      actor: 'worker',
+      event: 'job_completed',
+      ...(job ? { entity: { type: 'job', id: job.id ?? 'unknown' } } : {}),
+      outcome: 'success',
+      queue: worker.name,
+      jobName: job?.name,
+      attemptsMade: job?.attemptsMade ?? 0,
+      lagMs: job ? getJobLagMs(job) : null,
+      durationMs: job ? getJobDurationMs(job) : null
+    });
+  });
+
   worker.on('failed', (job, err) => {
     logger.error('Job failed', {
       actor: 'worker',
       event: 'job_failed',
       ...(job ? { entity: { type: 'job', id: job.id ?? 'unknown' } } : {}),
       outcome: 'failure',
+      queue: worker.name,
+      jobName: job?.name,
+      attemptsMade: job?.attemptsMade ?? 0,
+      lagMs: job ? getJobLagMs(job) : null,
+      durationMs: job ? getJobDurationMs(job) : null,
       error: String(err)
     });
   });

@@ -35,11 +35,16 @@ export type {
 
 export type {
   AccessDeniedResponse,
+  AdminAnomaliesResponse,
+  AdminLifecycleStatsResponse,
   AdminLoginCallback,
   AdminLoginStartResponse,
   AdminSession,
   AdminSessionResponse,
   ModerationAction,
+  OperationalAnomalySeverity,
+  OperationalAnomalySummary,
+  QueueHealthSnapshot,
   ResolveReportAction
 } from './schemas/admin';
 

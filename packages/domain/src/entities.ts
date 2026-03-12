@@ -9,10 +9,17 @@ export const OPERATIONAL_ANOMALY_TYPE_VALUES = [
   'missing_object',
   'orphaned_object',
   'stale_expiration',
-  'failed_cleanup'
+  'failed_cleanup',
+  'lifecycle_job_overdue',
+  'lifecycle_job_duplicate',
+  'reconciliation_scan_incomplete'
 ] as const;
 
 export type OperationalAnomalyType = (typeof OPERATIONAL_ANOMALY_TYPE_VALUES)[number];
+
+export const OPERATIONAL_ANOMALY_SEVERITY_VALUES = ['low', 'medium', 'high'] as const;
+
+export type OperationalAnomalySeverity = (typeof OPERATIONAL_ANOMALY_SEVERITY_VALUES)[number];
 
 export const FILE_MODERATION_ACTION_VALUES = ['hide', 'restore', 'delete'] as const;
 
@@ -93,6 +100,7 @@ export type OperationalSetting = {
 export type OperationalAnomaly = {
   id: string;
   type: OperationalAnomalyType;
+  severity: OperationalAnomalySeverity;
   fileId: string | null;
   details: Record<string, unknown> | null;
   detectedAt: Date;

@@ -6,6 +6,7 @@ export type {
   FileModerationEvent,
   FileReport,
   OperationalAnomaly,
+  OperationalAnomalySeverity,
   OperationalAnomalyType,
   OperationalSetting,
   ReportResolutionAction,
@@ -17,6 +18,7 @@ export type {
 export {
   DOWNLOAD_EVENT_TYPE_VALUES,
   FILE_MODERATION_ACTION_VALUES,
+  OPERATIONAL_ANOMALY_SEVERITY_VALUES,
   OPERATIONAL_ANOMALY_TYPE_VALUES,
   REPORT_RESOLUTION_ACTION_VALUES,
   SYSTEM_JOB_NAME_VALUES

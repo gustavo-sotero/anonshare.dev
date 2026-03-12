@@ -10,6 +10,9 @@ import { files } from './files';
  *   - "orphaned_object"   — object in storage with no matching metadata
  *   - "stale_expiration"  — file past expires_at but status not yet updated
  *   - "failed_cleanup"    — cleanup job could not delete object after max retries
+ *   - "lifecycle_job_overdue" — pending lifecycle job is materially overdue
+ *   - "lifecycle_job_duplicate" — duplicate pending lifecycle jobs found for one file
+ *   - "reconciliation_scan_incomplete" — reconcile could not fully inspect or repair state
  *
  * `file_id` is nullable: orphaned-object anomalies may have no metadata record.
  * Set to NULL on file deletion so anomaly records survive for admin review.

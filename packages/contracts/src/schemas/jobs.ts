@@ -9,6 +9,22 @@ export const QUEUE_CLEANUP_FILE = 'cleanup-file';
 export const QUEUE_RECONCILE = 'reconcile';
 
 /**
+ * Lifecycle jobs should keep a bounded history for operational forensics
+ * while avoiding unbounded Redis growth.
+ */
+export const LIFECYCLE_JOB_RETENTION = {
+  removeOnComplete: 500,
+  removeOnFail: 1_000
+} as const;
+
+/**
+ * One-time downloads are delivered through a short-lived presigned URL.
+ * Cleanup must wait until that delivery window has elapsed so the worker does
+ * not delete the object before the recipient can actually fetch it.
+ */
+export const ONE_TIME_DOWNLOAD_CLEANUP_DELAY_MS = 16 * 60 * 1_000;
+
+/**
  * Minimal job payload schemas shared between the API (job producers) and the
  * worker (job consumers). Payloads are intentionally small to avoid coupling
  * the worker to the full DB model — the worker re-fetches what it needs.

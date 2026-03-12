@@ -1,6 +1,8 @@
 // Re-export all API types (some are re-exported from their schema modules)
 export type {
   AccessDeniedResponse,
+  AdminAnomaliesResponse,
+  AdminLifecycleStatsResponse,
   AdminLoginCallback,
   AdminLoginStartResponse,
   AdminSession,
@@ -17,7 +19,10 @@ export type {
   ExpireFileJobPayload,
   FileMetaResponse,
   ModerationAction,
+  OperationalAnomalySeverity,
+  OperationalAnomalySummary,
   PreviewUrlResponse,
+  QueueHealthSnapshot,
   ReconcileJobPayload,
   ReportRequest,
   ReportResponse,
@@ -38,17 +43,24 @@ export {
 } from './errors';
 export {
   accessDeniedResponseSchema,
+  adminAnomaliesResponseSchema,
+  adminLifecycleStatsResponseSchema,
   adminLoginCallbackSchema,
   adminLoginStartResponseSchema,
   adminSessionResponseSchema,
   adminSessionSchema,
   moderationActionSchema,
+  operationalAnomalySeveritySchema,
+  operationalAnomalySummarySchema,
+  queueHealthSnapshotSchema,
   resolveReportSchema
 } from './schemas/admin';
 export {
   autoHideFileJobSchema,
   cleanupFileJobSchema,
   expireFileJobSchema,
+  LIFECYCLE_JOB_RETENTION,
+  ONE_TIME_DOWNLOAD_CLEANUP_DELAY_MS,
   QUEUE_CLEANUP_FILE,
   QUEUE_EXPIRE_FILE,
   QUEUE_RECONCILE,
