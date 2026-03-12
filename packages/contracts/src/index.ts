@@ -49,6 +49,9 @@ export {
   autoHideFileJobSchema,
   cleanupFileJobSchema,
   expireFileJobSchema,
+  QUEUE_CLEANUP_FILE,
+  QUEUE_EXPIRE_FILE,
+  QUEUE_RECONCILE,
   reconcileJobSchema
 } from './schemas/jobs';
 export {

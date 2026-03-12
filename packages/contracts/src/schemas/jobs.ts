@@ -1,6 +1,14 @@
 import { z } from 'zod';
 
 /**
+ * Canonical queue names shared between job producers (API) and consumers (worker).
+ * Keeping them here prevents string drift between processes.
+ */
+export const QUEUE_EXPIRE_FILE = 'expire-file';
+export const QUEUE_CLEANUP_FILE = 'cleanup-file';
+export const QUEUE_RECONCILE = 'reconcile';
+
+/**
  * Minimal job payload schemas shared between the API (job producers) and the
  * worker (job consumers). Payloads are intentionally small to avoid coupling
  * the worker to the full DB model — the worker re-fetches what it needs.

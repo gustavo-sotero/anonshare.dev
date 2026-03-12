@@ -1,10 +1,17 @@
+import type {
+  CleanupFileJobPayload,
+  ExpireFileJobPayload,
+  ReconcileJobPayload
+} from '@anonshare/contracts';
 import { validateWorkerEnv } from '@anonshare/infrastructure/config';
+import { createDb } from '@anonshare/infrastructure/db';
 import { logger } from '@anonshare/infrastructure/logger';
 import { closeRedisClient } from '@anonshare/infrastructure/redis';
+import { storageAdapter } from '@anonshare/infrastructure/storage';
 import { Queue, Worker } from 'bullmq';
-import { handleCleanupFile } from './handlers/cleanup-file';
-import { handleExpireFile } from './handlers/expire-file';
-import { handleReconcile } from './handlers/reconcile';
+import { makeHandleCleanupFile } from './handlers/cleanup-file';
+import { makeHandleExpireFile } from './handlers/expire-file';
+import { makeHandleReconcile } from './handlers/reconcile';
 import { QUEUE_CLEANUP_FILE, QUEUE_EXPIRE_FILE, QUEUE_RECONCILE } from './queues';
 
 // ─── Boot ────────────────────────────────────────────────────────────────────
@@ -17,26 +24,36 @@ const config = validateWorkerEnv();
 // avoiding version-mismatch conflicts with the infrastructure package's client.
 const connection = { url: config.redisUrl };
 
+// ─── Shared dependencies ──────────────────────────────────────────────────────
+
+const db = createDb();
+
+// ─── Queues (producers used by handlers) ─────────────────────────────────────
+
+const expireQueue = new Queue<ExpireFileJobPayload>(QUEUE_EXPIRE_FILE, { connection });
+const cleanupQueue = new Queue<CleanupFileJobPayload>(QUEUE_CLEANUP_FILE, { connection });
+const reconcileQueue = new Queue<ReconcileJobPayload>(QUEUE_RECONCILE, { connection });
+
 // ─── Workers ─────────────────────────────────────────────────────────────────
 
-const expireWorker = new Worker(QUEUE_EXPIRE_FILE, handleExpireFile, {
+const expireWorker = new Worker(QUEUE_EXPIRE_FILE, makeHandleExpireFile({ db, cleanupQueue }), {
   connection,
   concurrency: 5
 });
 
-const cleanupWorker = new Worker(QUEUE_CLEANUP_FILE, handleCleanupFile, {
-  connection,
-  concurrency: 5
-});
+const cleanupWorker = new Worker(
+  QUEUE_CLEANUP_FILE,
+  makeHandleCleanupFile({ db, storage: storageAdapter }),
+  { connection, concurrency: 5 }
+);
 
-const reconcileWorker = new Worker(QUEUE_RECONCILE, handleReconcile, {
-  connection,
-  concurrency: 1
-});
+const reconcileWorker = new Worker(
+  QUEUE_RECONCILE,
+  makeHandleReconcile({ db, storage: storageAdapter, cleanupQueue, expireQueue }),
+  { connection, concurrency: 1 }
+);
 
 // ─── Recurring reconciliation scheduler ──────────────────────────────────────
-
-const reconcileQueue = new Queue(QUEUE_RECONCILE, { connection });
 
 await reconcileQueue.upsertJobScheduler(
   'reconcile-periodic',
@@ -77,6 +94,8 @@ async function shutdown(): Promise<void> {
     expireWorker.close(),
     cleanupWorker.close(),
     reconcileWorker.close(),
+    expireQueue.close(),
+    cleanupQueue.close(),
     reconcileQueue.close()
   ]);
   await closeRedisClient();

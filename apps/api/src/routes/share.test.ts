@@ -167,8 +167,35 @@ describe('GET /share/:token — metadata', () => {
     expect(body.error.code).toBe(API_ERROR_CODES.NOT_FOUND);
   });
 
+  test('returns 404 for malformed token without querying the database', async () => {
+    const app = buildApp(makeMockDeps({ findFirstShouldThrow: true }));
+    const res = await request(app, '/share/bad!');
+
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { ok: boolean; error: { code: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe(API_ERROR_CODES.NOT_FOUND);
+  });
+
   test('returns 410 FILE_EXPIRED for expired files', async () => {
     const app = buildApp(makeMockDeps({ findFirst: makeFileRow({ status: 'expired' }) }));
+    const res = await request(app, '/share/Abc123defghijkl012');
+
+    expect(res.status).toBe(410);
+    const body = (await res.json()) as { ok: boolean; error: { code: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe(API_ERROR_CODES.FILE_EXPIRED);
+  });
+
+  test('returns 410 FILE_EXPIRED when active file is past expiresAt timestamp', async () => {
+    const app = buildApp(
+      makeMockDeps({
+        findFirst: makeFileRow({
+          status: 'active',
+          expiresAt: new Date(Date.now() - 60_000)
+        })
+      })
+    );
     const res = await request(app, '/share/Abc123defghijkl012');
 
     expect(res.status).toBe(410);
@@ -285,6 +312,16 @@ describe('GET /share/:token/download — standard download', () => {
     expect(res.status).toBe(404);
   });
 
+  test('returns 404 for malformed token without querying the database', async () => {
+    const app = buildApp(makeMockDeps({ findFirstShouldThrow: true }));
+    const res = await request(app, '/share/bad!/download');
+
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { ok: boolean; error: { code: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe(API_ERROR_CODES.NOT_FOUND);
+  });
+
   test('returns 200 presigned URL for an expiring standard file', async () => {
     // `expiring` is publicly accessible — downloads must still succeed.
     const app = buildApp(
@@ -314,6 +351,31 @@ describe('GET /share/:token/download — standard download', () => {
     expect(res.status).toBe(410);
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe(API_ERROR_CODES.FILE_EXPIRED);
+  });
+
+  test('returns 410 and records blocked event when active file is past expiresAt timestamp', async () => {
+    const insertedEvents: Array<{ eventType?: unknown; ipHash?: unknown }> = [];
+    const app = buildApp(
+      makeMockDeps({
+        findFirst: makeFileRow({
+          status: 'active',
+          expiresAt: new Date(Date.now() - 60_000)
+        }),
+        onInsertValues: (values) => {
+          if (typeof values === 'object' && values !== null) {
+            insertedEvents.push(values as { eventType?: unknown; ipHash?: unknown });
+          }
+        }
+      })
+    );
+    const res = await request(app, '/share/Abc123defghijkl012/download');
+
+    expect(res.status).toBe(410);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe(API_ERROR_CODES.FILE_EXPIRED);
+    expect(insertedEvents).toContainEqual(
+      expect.objectContaining({ eventType: 'blocked', ipHash: null })
+    );
   });
 
   test('returns 410 for consumed file', async () => {
@@ -601,6 +663,24 @@ describe('GET /share/:token/preview', () => {
     expect(res.status).toBe(410);
   });
 
+  test('returns 410 FILE_EXPIRED when active file is past expiresAt timestamp', async () => {
+    const app = buildApp(
+      makeMockDeps({
+        findFirst: makeFileRow({
+          status: 'active',
+          allowPreview: true,
+          mimeType: 'image/png',
+          expiresAt: new Date(Date.now() - 60_000)
+        })
+      })
+    );
+    const res = await request(app, '/share/Abc123defghijkl012/preview');
+
+    expect(res.status).toBe(410);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe(API_ERROR_CODES.FILE_EXPIRED);
+  });
+
   test('returns 410 FILE_HIDDEN for hidden files', async () => {
     const app = buildApp(
       makeMockDeps({
@@ -645,6 +725,16 @@ describe('GET /share/:token/preview', () => {
     const res = await request(app, '/share/Abc123defghijkl012/preview');
 
     expect(res.status).toBe(404);
+  });
+
+  test('returns 404 for malformed token without querying the database', async () => {
+    const app = buildApp(makeMockDeps({ findFirstShouldThrow: true }));
+    const res = await request(app, '/share/bad!/preview');
+
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { ok: boolean; error: { code: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe(API_ERROR_CODES.NOT_FOUND);
   });
 
   test('returns 500 when presigned URL generation fails', async () => {

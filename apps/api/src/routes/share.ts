@@ -1,4 +1,4 @@
-import { API_ERROR_CODES } from '@anonshare/contracts';
+import { API_ERROR_CODES, shareTokenParamsSchema } from '@anonshare/contracts';
 import {
   getUnavailabilityMessage,
   isPreviewSupported,
@@ -43,6 +43,15 @@ function errorBody(code: string, message: string) {
   return { ok: false as const, error: { code, message } };
 }
 
+function parseShareToken(token: string): string | null {
+  const parsed = shareTokenParamsSchema.safeParse({ token });
+  if (!parsed.success) {
+    return null;
+  }
+
+  return parsed.data.token;
+}
+
 /**
  * Map a file status to the most specific API error code.
  * Collapsed status values (hidden, missing) use the generic unavailable code
@@ -61,6 +70,21 @@ function statusToErrorCode(status: string): string {
     default:
       return API_ERROR_CODES.FILE_UNAVAILABLE;
   }
+}
+
+/**
+ * Returns true when a file's expiration timestamp has passed, even if the
+ * background job has not yet updated the stored status. This enforces
+ * expiration at read time so that the public interface blocks access
+ * immediately — independent of cleanup job execution.
+ *
+ * Only applies to publicly-accessible statuses (active / expiring); files
+ * already in a terminal state have their own unavailability handling.
+ */
+function isExpiredByTimestamp(file: { status: string; expiresAt: Date | null }): boolean {
+  if (file.status !== 'active' && file.status !== 'expiring') return false;
+  if (!file.expiresAt) return false;
+  return file.expiresAt <= new Date();
 }
 
 // ─── Dependency injection types ───────────────────────────────────────────────
@@ -89,8 +113,13 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
   // render a precise state message rather than a generic error.
   router.get('/:token', async (c) => {
     const requestId = c.req.header('x-request-id') ?? crypto.randomUUID();
-    const { token } = c.req.param();
+    const rawToken = c.req.param('token');
     c.header('cache-control', 'no-store');
+
+    const token = parseShareToken(rawToken);
+    if (!token) {
+      return c.json(errorBody(API_ERROR_CODES.NOT_FOUND, 'File not found'), 404);
+    }
 
     let file: typeof files.$inferSelect | undefined;
     try {
@@ -112,6 +141,13 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
     if (!file) {
       c.header('cache-control', 'no-store');
       return c.json(errorBody(API_ERROR_CODES.NOT_FOUND, 'File not found'), 404);
+    }
+
+    // Enforce expiration at read time regardless of whether the background job
+    // has already updated the status. This guarantees immediate inaccessibility.
+    if (isExpiredByTimestamp(file)) {
+      c.header('cache-control', 'no-store');
+      return c.json(errorBody(API_ERROR_CODES.FILE_EXPIRED, 'This file has expired'), 410);
     }
 
     const unavailabilityMessage = getUnavailabilityMessage(file.status);
@@ -163,10 +199,15 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
   // locking primitives.
   router.get('/:token/download', async (c) => {
     const requestId = c.req.header('x-request-id') ?? crypto.randomUUID();
-    const { token } = c.req.param();
+    const rawToken = c.req.param('token');
     const rawIp = c.req.header('x-forwarded-for') ?? c.req.header('x-real-ip');
     const ipHash = await hashIp(rawIp);
     c.header('cache-control', 'no-store');
+
+    const token = parseShareToken(rawToken);
+    if (!token) {
+      return c.json(errorBody(API_ERROR_CODES.NOT_FOUND, 'File not found'), 404);
+    }
 
     let file: typeof files.$inferSelect | undefined;
     try {
@@ -187,6 +228,25 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
 
     if (!file) {
       return c.json(errorBody(API_ERROR_CODES.NOT_FOUND, 'File not found'), 404);
+    }
+
+    // Enforce expiration at read time, independent of background job execution.
+    if (isExpiredByTimestamp(file)) {
+      logger.info('Download blocked: file expired by timestamp', {
+        event: 'download_blocked',
+        requestId,
+        actor: 'anonymous',
+        entity: { type: 'file', id: token },
+        outcome: 'failure',
+        reason: 'expired_by_timestamp'
+      });
+
+      resolveDb()
+        .insert(downloadEvents)
+        .values({ fileId: file.id, eventType: 'blocked', ipHash })
+        .catch(() => {});
+
+      return c.json(errorBody(API_ERROR_CODES.FILE_EXPIRED, 'This file has expired'), 410);
     }
 
     if (!isPubliclyAccessible(file.status)) {
@@ -402,8 +462,13 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
   // Prerequisites: file accessible, allowPreview=true, not one-time, MIME in allowlist.
   router.get('/:token/preview', async (c) => {
     const requestId = c.req.header('x-request-id') ?? crypto.randomUUID();
-    const { token } = c.req.param();
+    const rawToken = c.req.param('token');
     c.header('cache-control', 'no-store');
+
+    const token = parseShareToken(rawToken);
+    if (!token) {
+      return c.json(errorBody(API_ERROR_CODES.NOT_FOUND, 'File not found'), 404);
+    }
 
     let file: typeof files.$inferSelect | undefined;
     try {
@@ -424,6 +489,11 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
 
     if (!file) {
       return c.json(errorBody(API_ERROR_CODES.NOT_FOUND, 'File not found'), 404);
+    }
+
+    // Enforce expiration at read time, independent of background job execution.
+    if (isExpiredByTimestamp(file)) {
+      return c.json(errorBody(API_ERROR_CODES.FILE_EXPIRED, 'This file has expired'), 410);
     }
 
     if (!isPubliclyAccessible(file.status)) {

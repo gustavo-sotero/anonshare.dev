@@ -1,3 +1,4 @@
+import { reportReasonValues } from '@anonshare/contracts';
 import { isPreviewSupported } from '@anonshare/domain';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { useCallback, useEffect, useState } from 'react';
@@ -133,6 +134,26 @@ function mimeLabel(mimeType: string): string {
 // ─── Status badge map ─────────────────────────────────────────────────────────
 
 type UnavailabilityInfo = { label: string; message: string };
+type ReportReason = (typeof reportReasonValues)[number];
+
+const TEXT_PREVIEW_MAX_BYTES = 64 * 1024;
+
+const RUNTIME_UNAVAILABLE_CODES = new Set([
+  'file_expired',
+  'file_consumed',
+  'file_hidden',
+  'file_deleted',
+  'file_unavailable',
+  'not_found'
+]);
+
+const REPORT_REASON_LABELS: Record<ReportReason, string> = {
+  illegal_content: 'Illegal content',
+  copyright_violation: 'Copyright violation',
+  malware: 'Malware or phishing',
+  spam: 'Spam',
+  other: 'Other'
+};
 
 const UNAVAILABILITY: Record<string, UnavailabilityInfo> = {
   file_expired: {
@@ -160,6 +181,8 @@ const UNAVAILABILITY: Record<string, UnavailabilityInfo> = {
     message: "This link doesn't match any file we have. It may never have existed."
   }
 };
+
+const TEXT_PREVIEW_TIMEOUT_MS = 15_000;
 
 // ─── Preview renderer ─────────────────────────────────────────────────────────
 
@@ -207,19 +230,118 @@ function PreviewPanel({ url, mimeType }: { url: string; mimeType: string }) {
   return null;
 }
 
+async function readTextPreview(
+  url: string,
+  maxBytes: number
+): Promise<{ text: string; truncated: boolean }> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), TEXT_PREVIEW_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+
+    if (!response.ok) {
+      throw new Error('Preview request failed');
+    }
+
+    if (!response.body) {
+      const text = await response.text();
+      return {
+        text: text.slice(0, maxBytes),
+        truncated: text.length > maxBytes
+      };
+    }
+
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+    let streamDone = false;
+    let truncated = false;
+
+    while (received < maxBytes) {
+      const { done, value } = await reader.read();
+      streamDone = done;
+
+      if (done) {
+        break;
+      }
+
+      if (!value || value.byteLength === 0) {
+        continue;
+      }
+
+      const remaining = maxBytes - received;
+      if (value.byteLength <= remaining) {
+        chunks.push(value);
+        received += value.byteLength;
+        continue;
+      }
+
+      chunks.push(value.subarray(0, remaining));
+      received += remaining;
+      truncated = true;
+      break;
+    }
+
+    if (!truncated && !streamDone) {
+      const probe = await reader.read();
+      truncated = !probe.done;
+    }
+
+    await reader.cancel().catch(() => {});
+
+    const bytes = new Uint8Array(received);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+
+    return {
+      text: new TextDecoder().decode(bytes),
+      truncated
+    };
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error('Preview request timed out');
+    }
+
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 function TextPreview({ url }: { url: string }) {
   const [text, setText] = useState<string | null>(null);
   const [isTruncated, setIsTruncated] = useState(false);
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    fetch(url)
-      .then((r) => r.text())
-      .then((t) => {
-        setIsTruncated(t.length > 64_000);
-        setText(t.slice(0, 64_000)); // cap at 64 KB to avoid DOM bloat
+    let cancelled = false;
+
+    setText(null);
+    setIsTruncated(false);
+    setError(false);
+
+    readTextPreview(url, TEXT_PREVIEW_MAX_BYTES)
+      .then((result) => {
+        if (cancelled) {
+          return;
+        }
+
+        setIsTruncated(result.truncated);
+        setText(result.text);
       })
-      .catch(() => setError(true));
+      .catch(() => {
+        if (!cancelled) {
+          setError(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [url]);
 
   if (error) return <p className="preview-panel__error">Could not load text preview.</p>;
@@ -254,9 +376,13 @@ function SharePage() {
   const [previewMime, setPreviewMime] = useState<string>('');
   // Track whether a one-time file has been consumed in this session
   const [consumed, setConsumed] = useState(false);
+  const [runtimeUnavailable, setRuntimeUnavailable] = useState<{
+    code: string;
+    message: string;
+  } | null>(null);
   // Report section state
   const [reportOpen, setReportOpen] = useState(false);
-  const [reportReason, setReportReason] = useState('illegal_content');
+  const [reportReason, setReportReason] = useState<ReportReason>(reportReasonValues[0]);
   const [reportMessage, setReportMessage] = useState('');
   const [reportPhase, setReportPhase] = useState<'idle' | 'submitting' | 'success' | 'error'>(
     'idle'
@@ -292,10 +418,29 @@ function SharePage() {
             setConsumed(true);
           }
         } else {
-          const msg = isErrorEnvelope(body)
-            ? body.error.message
-            : 'Download failed. Please try again.';
-          setDownloadError(msg);
+          if (isErrorEnvelope(body)) {
+            const { code, message } = body.error;
+
+            if (code === 'file_consumed') {
+              setConsumed(true);
+              setDownloadError(null);
+              setDownloadState('idle');
+              return;
+            }
+
+            if (RUNTIME_UNAVAILABLE_CODES.has(code)) {
+              setRuntimeUnavailable({ code, message });
+              setDownloadError(null);
+              setDownloadState('idle');
+              return;
+            }
+
+            setDownloadError(message);
+            setDownloadState('error');
+            return;
+          }
+
+          setDownloadError('Download failed. Please try again.');
           setDownloadState('error');
         }
       } catch {
@@ -322,6 +467,12 @@ function SharePage() {
         setPreviewMime(d.mimeType);
         setPreviewState('ready');
       } else {
+        if (isErrorEnvelope(body) && RUNTIME_UNAVAILABLE_CODES.has(body.error.code)) {
+          setRuntimeUnavailable({ code: body.error.code, message: body.error.message });
+          setPreviewState('hidden');
+          return;
+        }
+
         setPreviewState('error');
       }
     } catch {
@@ -369,7 +520,31 @@ function SharePage() {
     const code = loader.errorCode ?? 'file_unavailable';
     const info: UnavailabilityInfo = UNAVAILABILITY[code] ?? {
       label: 'Unavailable',
-      message: 'This file is not available right now.'
+      message: loader.errorMessage || 'This file is not available right now.'
+    };
+
+    return (
+      <SiteFrame eyebrow="File link" title={info.label} summary={info.message}>
+        <section className="panel panel--unavailable">
+          <div className="unavail-icon" aria-hidden="true">
+            {code === 'file_expired' ? '⏳' : code === 'file_consumed' ? '✓' : '⊘'}
+          </div>
+          <p className="unavail-message">{info.message}</p>
+          <div className="action-row">
+            <Link to="/" className="button-link">
+              Share a new file
+            </Link>
+          </div>
+        </section>
+      </SiteFrame>
+    );
+  }
+
+  if (runtimeUnavailable) {
+    const code = runtimeUnavailable.code;
+    const info: UnavailabilityInfo = UNAVAILABILITY[code] ?? {
+      label: 'Unavailable',
+      message: runtimeUnavailable.message || 'This file is not available right now.'
     };
 
     return (
@@ -476,7 +651,16 @@ function SharePage() {
 
           {previewState === 'loading' && <p className="preview-panel__loading">Loading preview…</p>}
           {previewState === 'error' && (
-            <p className="preview-panel__error">Preview unavailable for this file.</p>
+            <div className="preview-panel__error">
+              <p>Preview unavailable for this file.</p>
+              <button
+                type="button"
+                className="button-link button-link--ghost button-link--sm"
+                onClick={loadPreview}
+              >
+                Retry preview
+              </button>
+            </div>
           )}
           {previewState === 'ready' && previewUrl && (
             <PreviewPanel url={previewUrl} mimeType={previewMime} />
@@ -542,14 +726,19 @@ function SharePage() {
                 <select
                   className="report-form__select"
                   value={reportReason}
-                  onChange={(e) => setReportReason(e.target.value)}
+                  onChange={(e) => {
+                    const nextReason = e.target.value;
+                    if (reportReasonValues.includes(nextReason as ReportReason)) {
+                      setReportReason(nextReason as ReportReason);
+                    }
+                  }}
                   disabled={reportPhase === 'submitting'}
                 >
-                  <option value="illegal_content">Illegal content</option>
-                  <option value="copyright_violation">Copyright violation</option>
-                  <option value="malware">Malware or phishing</option>
-                  <option value="spam">Spam</option>
-                  <option value="other">Other</option>
+                  {reportReasonValues.map((reason) => (
+                    <option key={reason} value={reason}>
+                      {REPORT_REASON_LABELS[reason]}
+                    </option>
+                  ))}
                 </select>
               </label>
               <label className="report-form__label">

@@ -1,3 +1,3 @@
-export const QUEUE_EXPIRE_FILE = 'expire-file';
-export const QUEUE_CLEANUP_FILE = 'cleanup-file';
-export const QUEUE_RECONCILE = 'reconcile';
+// Re-export canonical queue names from contracts so both the API (producer)
+// and the worker (consumer) share the same string values.
+export { QUEUE_CLEANUP_FILE, QUEUE_EXPIRE_FILE, QUEUE_RECONCILE } from '@anonshare/contracts';

@@ -1,3 +1,4 @@
+import { MAX_FILE_SIZE_BYTES } from '@anonshare/domain';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { useCallback, useRef, useState } from 'react';
 import { SiteFrame } from '~/components/site-frame';
@@ -119,6 +120,15 @@ function HomePage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const selectFile = useCallback((file: File) => {
+    if (file.size > MAX_FILE_SIZE_BYTES) {
+      setPhase({
+        kind: 'error',
+        message: `File exceeds ${formatBytes(MAX_FILE_SIZE_BYTES)} limit.`,
+        file
+      });
+      return;
+    }
+
     setPhase({ kind: 'selected', file });
   }, []);
 

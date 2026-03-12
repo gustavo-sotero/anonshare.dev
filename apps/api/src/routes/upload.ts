@@ -7,6 +7,7 @@ import { logger } from '@anonshare/infrastructure/logger';
 import { StorageError, storageAdapter } from '@anonshare/infrastructure/storage';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { enqueueExpireFileJob } from '../queues';
 
 // ─── Lazy DB singleton ────────────────────────────────────────────────────────
 // Defer initialisation to first use so that importing this module in tests
@@ -118,6 +119,12 @@ export type UploadRouterDeps = {
   getDb?: () => ReturnType<typeof createDb>;
   /** Override the default storage adapter. Useful in tests. */
   storage?: UploadStorage;
+  /**
+   * Override the default job enqueue function. Useful in tests.
+   * Receives the file UUID and the delay in ms from now.
+   * Non-fatal: if omitted or if it throws, the reconciler will catch missed expirations.
+   */
+  enqueueExpireFile?: (fileId: string, delayMs: number) => Promise<void>;
 };
 
 /**
@@ -130,6 +137,7 @@ export type UploadRouterDeps = {
 export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
   const resolveDb = deps.getDb ?? getDb;
   const resolveStorage: UploadStorage = deps.storage ?? storageAdapter;
+  const resolveEnqueueExpireFile = deps.enqueueExpireFile ?? enqueueExpireFileJob;
 
   const router = new Hono();
 
@@ -493,6 +501,28 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
       fileId,
       objectKey
     });
+
+    // ── Schedule expiration job if applicable ─────────────────────────────────
+    // Non-fatal: if enqueueing fails, the hourly reconciler will catch the
+    // missed expiration. The reconciler is the second layer of correctness.
+    if (expiresAt) {
+      const delayMs = expiresAt.getTime() - Date.now();
+      if (delayMs > 0) {
+        try {
+          await resolveEnqueueExpireFile(fileId, delayMs);
+        } catch (err) {
+          logger.warn('Upload: failed to enqueue expire-file job — reconciler will handle', {
+            event: 'upload_activated',
+            requestId,
+            actor: 'anonymous',
+            entity: { type: 'file', id: token },
+            outcome: 'success',
+            fileId,
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
+      }
+    }
 
     // ── Return share link ─────────────────────────────────────────────────────
     const baseUrl = appConfig.baseUrl();
