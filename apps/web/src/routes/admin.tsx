@@ -3,7 +3,7 @@ import { SiteFrame } from '~/components/site-frame';
 
 export const Route = createFileRoute('/admin')({
   head: () => ({
-    meta: [{ title: 'anonshare | Admin shell scaffold' }]
+    meta: [{ title: 'anonshare | Admin' }, { name: 'robots', content: 'noindex, nofollow' }]
   }),
   component: AdminShellPage
 });

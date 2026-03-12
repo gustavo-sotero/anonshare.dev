@@ -364,3 +364,620 @@ code {
     grid-template-columns: 1fr;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Upload form — drop zone
+═══════════════════════════════════════════════════════════════════════════ */
+
+.drop-zone {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 180px;
+  border: 2px dashed var(--border);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+  transition:
+    border-color 200ms ease,
+    background-color 200ms ease;
+  outline: none;
+}
+
+.drop-zone:hover,
+.drop-zone:focus-visible {
+  border-color: rgba(200, 255, 135, 0.56);
+  background: rgba(200, 255, 135, 0.04);
+}
+
+.drop-zone--active {
+  border-color: var(--accent);
+  background: rgba(200, 255, 135, 0.08);
+  box-shadow: 0 0 0 4px rgba(200, 255, 135, 0.1);
+}
+
+.drop-zone--selected {
+  border-style: solid;
+  border-color: rgba(200, 255, 135, 0.4);
+}
+
+.drop-zone:focus-within {
+  outline: 2px solid rgba(200, 255, 135, 0.6);
+  outline-offset: 2px;
+}
+
+.drop-zone__input {
+  /* Visually hidden but accessible: keeps element in tab order for AT */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+  pointer-events: none;
+}
+
+.drop-zone__prompt {
+  display: grid;
+  gap: 6px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.drop-zone__icon {
+  font-size: 2.4rem;
+  color: var(--accent);
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.drop-zone__hint {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.drop-zone__file-info {
+  display: grid;
+  gap: 6px;
+  text-align: center;
+  padding: 0 20px;
+  pointer-events: none;
+}
+
+.drop-zone__filename {
+  font-weight: 600;
+  font-size: 1.05rem;
+  word-break: break-all;
+  max-width: 58ch;
+}
+
+.drop-zone__meta {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-family: var(--font-mono);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Upload form — progress bar
+═══════════════════════════════════════════════════════════════════════════ */
+
+.upload-progress {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  margin-top: 16px;
+}
+
+.upload-progress__bar {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-deep), var(--accent));
+  transition: width 120ms ease;
+  min-width: 6px;
+}
+
+.upload-progress__label {
+  position: absolute;
+  right: 0;
+  top: -22px;
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Upload form — option rows
+═══════════════════════════════════════════════════════════════════════════ */
+
+.options-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.option-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid rgba(163, 193, 173, 0.14);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.02);
+  cursor: default;
+}
+
+.option-row--disabled {
+  opacity: 0.45;
+}
+
+.option-row--select {
+  flex-direction: column;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.option-row__text {
+  display: grid;
+  gap: 4px;
+}
+
+.option-row__name {
+  font-weight: 600;
+  font-size: 0.93rem;
+}
+
+.option-row__desc {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  max-width: 48ch;
+}
+
+/* Toggle switch */
+.toggle {
+  flex-shrink: 0;
+  position: relative;
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  border: none;
+  background: rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+  padding: 0;
+  transition: background-color 200ms ease;
+}
+
+.toggle--on {
+  background: var(--accent);
+}
+
+.toggle--locked {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.toggle__thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 200ms ease;
+}
+
+.toggle--on .toggle__thumb {
+  transform: translateX(18px);
+  background: #08111b;
+}
+
+/* Expiry preset buttons */
+.expiry-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.expiry-btn {
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease,
+    color 180ms ease;
+}
+
+.expiry-btn:hover {
+  border-color: rgba(200, 255, 135, 0.4);
+  color: var(--text);
+}
+
+.expiry-btn--active {
+  background: rgba(200, 255, 135, 0.12);
+  border-color: rgba(200, 255, 135, 0.6);
+  color: var(--accent);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Upload form — share result / misc
+═══════════════════════════════════════════════════════════════════════════ */
+
+.share-result {
+  display: grid;
+  gap: 14px;
+  margin: 16px 0;
+}
+
+.share-result__url {
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(200, 255, 135, 0.3);
+  background: rgba(200, 255, 135, 0.06);
+  font-family: var(--font-mono);
+  font-size: 0.84rem;
+  color: var(--accent);
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.share-result__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.upload-meta-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.upload-reset-link {
+  margin-top: 12px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 0.82rem;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-decoration-color: rgba(163, 193, 173, 0.4);
+}
+
+.upload-reset-link:hover {
+  color: var(--text);
+}
+
+.upload-error {
+  margin: 12px 0 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(255, 80, 80, 0.08);
+  border: 1px solid rgba(255, 80, 80, 0.24);
+  color: #ff9090;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.upload-footer-note {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.inline-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: rgba(200, 255, 135, 0.4);
+}
+
+.inline-link:hover {
+  text-decoration-color: var(--accent);
+}
+
+.chip--error {
+  background: rgba(255, 80, 80, 0.16);
+  color: #ff9090;
+  border: 1px solid rgba(255, 80, 80, 0.3);
+}
+
+/* Disabled button state */
+.button-link:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.button-link--sm {
+  min-height: 34px;
+  padding: 7px 13px;
+  font-size: 0.82rem;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Share page — status badges
+═══════════════════════════════════════════════════════════════════════════ */
+
+.badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.status-badge--active {
+  background: rgba(200, 255, 135, 0.12);
+  color: var(--accent);
+  border: 1px solid rgba(200, 255, 135, 0.3);
+}
+
+.status-badge--expiring {
+  background: rgba(255, 211, 122, 0.12);
+  color: var(--warning);
+  border: 1px solid rgba(255, 211, 122, 0.3);
+}
+
+.status-badge--expired {
+  background: rgba(163, 193, 173, 0.08);
+  color: var(--muted);
+  border: 1px solid rgba(163, 193, 173, 0.2);
+}
+
+.status-badge--consumed {
+  background: rgba(255, 211, 122, 0.1);
+  color: var(--warning);
+  border: 1px solid rgba(255, 211, 122, 0.25);
+}
+
+.status-badge--onetime {
+  background: rgba(255, 80, 80, 0.08);
+  color: #ff9090;
+  border: 1px solid rgba(255, 80, 80, 0.2);
+}
+
+.status-badge--preview {
+  background: rgba(122, 201, 67, 0.08);
+  color: var(--accent-deep);
+  border: 1px solid rgba(122, 201, 67, 0.25);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Share page — file metadata grid
+═══════════════════════════════════════════════════════════════════════════ */
+
+.file-meta-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.file-meta-item {
+  display: grid;
+  gap: 4px;
+  padding: 12px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(163, 193, 173, 0.14);
+  background: rgba(255, 255, 255, 0.02);
+  min-width: 120px;
+}
+
+.file-meta-item__label {
+  color: var(--muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.file-meta-item__value {
+  font-weight: 600;
+  font-size: 0.9rem;
+  font-family: var(--font-mono);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Share page — unavailable state
+═══════════════════════════════════════════════════════════════════════════ */
+
+.panel--unavailable {
+  background: rgba(8, 17, 27, 0.8);
+  border-color: rgba(163, 193, 173, 0.12);
+}
+
+.unavail-icon {
+  font-size: 2.8rem;
+  margin-bottom: 12px;
+  color: var(--muted);
+}
+
+.unavail-message {
+  margin: 0 0 20px;
+  color: var(--muted);
+  line-height: 1.65;
+  max-width: 52ch;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Share page — one-time warning
+═══════════════════════════════════════════════════════════════════════════ */
+
+.one-time-warning {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 80, 80, 0.06);
+  border: 1px solid rgba(255, 80, 80, 0.2);
+  color: #ff9090;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Share page — preview panel
+═══════════════════════════════════════════════════════════════════════════ */
+
+.preview-panel {
+  margin-top: 4px;
+  border-radius: 18px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(163, 193, 173, 0.14);
+}
+
+.preview-panel__image {
+  display: block;
+  max-width: 100%;
+  max-height: 560px;
+  margin: 0 auto;
+  object-fit: contain;
+}
+
+.preview-panel__video {
+  display: block;
+  width: 100%;
+  max-height: 500px;
+}
+
+.preview-panel__audio {
+  display: block;
+  width: 100%;
+  padding: 16px;
+}
+
+.preview-panel--embed {
+  height: 600px;
+}
+
+.preview-panel__iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+.preview-panel--text {
+  max-height: 480px;
+  overflow: auto;
+}
+
+.preview-panel__pre {
+  margin: 0;
+  padding: 20px;
+  font-size: 0.82rem;
+  font-family: var(--font-mono);
+  color: var(--text);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.preview-panel__loading,
+.preview-panel__error {
+  padding: 24px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Share page — inline report form
+═══════════════════════════════════════════════════════════════════════════ */
+
+/* Inline text-styled button for the "report it" affordance inside prose */
+.inline-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: rgba(200, 255, 135, 0.4);
+}
+
+.inline-btn:hover {
+  text-decoration-color: var(--accent);
+}
+
+.report-form {
+  display: grid;
+  gap: 16px;
+}
+
+.report-form__label {
+  display: grid;
+  gap: 8px;
+  font-size: 0.84rem;
+  color: var(--muted);
+}
+
+.report-form__optional {
+  color: rgba(163, 193, 173, 0.55);
+  font-size: 0.76rem;
+}
+
+.report-form__select,
+.report-form__textarea {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+  transition: border-color 180ms ease;
+  appearance: none;
+}
+
+.report-form__select {
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23a6b5ac' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  padding-right: 34px;
+}
+
+.report-form__select:focus,
+.report-form__textarea:focus {
+  outline: none;
+  border-color: rgba(200, 255, 135, 0.5);
+}
+
+.report-form__select:disabled,
+.report-form__textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.report-form__textarea {
+  resize: vertical;
+  min-height: 80px;
+  line-height: 1.5;
+}
+
+.report-success {
+  color: var(--accent) !important;
+}

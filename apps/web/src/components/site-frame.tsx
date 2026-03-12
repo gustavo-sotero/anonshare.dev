@@ -19,21 +19,18 @@ export function SiteFrame({ eyebrow, title, summary, children, rail }: SiteFrame
           <Link to="/" className="brand-mark">
             anonshare
           </Link>
-          <p className="brand-note">Module 1 foundation in motion</p>
+          <p className="brand-note">Anonymous file sharing</p>
         </div>
 
         <nav className="topbar__nav" aria-label="Primary">
           <Link to="/" className="nav-link">
-            Home
+            Share a file
           </Link>
           <Link to="/about" className="nav-link">
             About
           </Link>
           <Link to="/admin" className="nav-link">
-            Admin shell
-          </Link>
-          <Link to="/share/$token" params={{ token: 'demo-token' }} className="nav-link">
-            Share route
+            Admin
           </Link>
         </nav>
       </header>
@@ -46,45 +43,52 @@ export function SiteFrame({ eyebrow, title, summary, children, rail }: SiteFrame
 
       <div className="layout-grid">
         <section className="stack">{children}</section>
-        <aside className="stack stack--rail">{rail ?? <FoundationRail />}</aside>
+        <aside className="stack stack--rail">{rail ?? <InfoRail />}</aside>
       </div>
     </main>
   );
 }
 
-function FoundationRail() {
+function InfoRail() {
   return (
     <>
       <section className="panel panel--muted">
-        <p className="panel__label">Running surfaces</p>
+        <p className="panel__label">How it works</p>
         <div className="status-list">
           <div className="status-item">
-            <span>Web</span>
-            <strong>TanStack Start shell</strong>
+            <span>Step 1</span>
+            <strong>Pick a file — up to 256 MB</strong>
           </div>
           <div className="status-item">
-            <span>API</span>
-            <strong>Hono boundary</strong>
+            <span>Step 2</span>
+            <strong>Set access rules and expiration</strong>
           </div>
           <div className="status-item">
-            <span>Worker</span>
-            <strong>BullMQ bootstrap</strong>
+            <span>Step 3</span>
+            <strong>Copy the link and share it</strong>
           </div>
           <div className="status-item">
-            <span>Local infra</span>
-            <strong>Postgres, Redis, MinIO</strong>
+            <span>Privacy</span>
+            <strong>No account, no tracking</strong>
           </div>
         </div>
       </section>
 
       <section className="panel panel--muted">
-        <p className="panel__label">Operator checklist</p>
-        <div className="command-list">
-          <code>bun run infra:up</code>
-          <code>bun run db:migrate</code>
-          <code>bun run dev:api</code>
-          <code>bun run dev:worker</code>
-          <code>bun run dev:web</code>
+        <p className="panel__label">Supported rules</p>
+        <div className="status-list">
+          <div className="status-item">
+            <span>One-time</span>
+            <strong>Link expires after first download</strong>
+          </div>
+          <div className="status-item">
+            <span>Expiration</span>
+            <strong>Auto-delete after 1 h to 30 d</strong>
+          </div>
+          <div className="status-item">
+            <span>Preview</span>
+            <strong>Images, video, audio, PDF, text</strong>
+          </div>
         </div>
       </section>
     </>
