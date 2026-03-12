@@ -443,11 +443,7 @@ async function requireAdminSession(
   return undefined;
 }
 
-async function buildQueueHealthSnapshot(
-  queue: QueueStatsReader,
-  nowMs: number,
-  requestId: string
-) {
+async function buildQueueHealthSnapshot(queue: QueueStatsReader, nowMs: number, requestId: string) {
   const [countsResult, waitingResult, delayedResult, jobsResult] = await Promise.all([
     readQueueMetric({
       queue,
@@ -493,7 +489,9 @@ async function buildQueueHealthSnapshot(
 
   return {
     queue: normalizeQueueName(queue.name),
-    status: degraded ? ('degraded' satisfies QueueHealthStatus) : ('healthy' satisfies QueueHealthStatus),
+    status: degraded
+      ? ('degraded' satisfies QueueHealthStatus)
+      : ('healthy' satisfies QueueHealthStatus),
     lastError,
     waiting: counts.waiting ?? 0,
     active: counts.active ?? 0,

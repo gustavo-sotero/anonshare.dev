@@ -404,7 +404,9 @@ describe('reconcile handler — Pass A: stale expirations', () => {
     const db: DbStubs = {
       selectSequence: [
         [],
-        [{ id: 'future-file', expiresAt: new Date(now.getTime() + 60_000), objectKey: 'objects/f' }],
+        [
+          { id: 'future-file', expiresAt: new Date(now.getTime() + 60_000), objectKey: 'objects/f' }
+        ],
         []
       ],
       anomalyFindFirstReturn: null
