@@ -144,6 +144,20 @@ export const FILE_STATUS_TRANSITION_RULES = [
   },
   {
     from: 'hidden',
+    to: 'expiring',
+    triggers: ['manual'],
+    reason:
+      'Restoring a hidden file should preserve its public lifecycle state when it was already expiring.'
+  },
+  {
+    from: 'hidden',
+    to: 'expired',
+    triggers: ['manual'],
+    reason:
+      'Restoring a hidden file after its deadline should reveal the expired lifecycle state instead of reactivating it.'
+  },
+  {
+    from: 'hidden',
     to: 'deleted',
     triggers: ['manual'],
     reason: 'A hidden file can be permanently removed after moderation review.'

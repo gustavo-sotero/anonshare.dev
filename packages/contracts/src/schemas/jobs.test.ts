@@ -2,9 +2,24 @@ import { describe, expect, test } from 'bun:test';
 import {
   autoHideFileJobSchema,
   cleanupFileJobSchema,
+  DOWNLOAD_URL_EXPIRY_GRACE_SECONDS,
+  DOWNLOAD_URL_EXPIRY_SECONDS,
   expireFileJobSchema,
+  ONE_TIME_DOWNLOAD_CLEANUP_DELAY_MS,
   reconcileJobSchema
 } from './jobs';
+
+describe('lifecycle timing constants', () => {
+  test('keeps one-time cleanup delay aligned with download URL expiry and grace window', () => {
+    expect(ONE_TIME_DOWNLOAD_CLEANUP_DELAY_MS).toBe(
+      (DOWNLOAD_URL_EXPIRY_SECONDS + DOWNLOAD_URL_EXPIRY_GRACE_SECONDS) * 1000
+    );
+  });
+
+  test('uses expected default download URL expiry window', () => {
+    expect(DOWNLOAD_URL_EXPIRY_SECONDS).toBe(900);
+  });
+});
 
 describe('expireFileJobSchema', () => {
   test('accepts a valid payload', () => {

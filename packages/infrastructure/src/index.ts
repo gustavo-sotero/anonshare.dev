@@ -17,6 +17,13 @@ export {
 } from './health/index';
 export type { LogContext } from './logger/index';
 export { logger } from './logger/index';
+export type { DailyRateLimitBlockedCount, RateLimitResult } from './rate-limit/index';
+export {
+  checkRateLimit,
+  listRateLimitBlockedCountsByDay,
+  RATE_LIMIT_BLOCKED_METRIC_SURFACES,
+  recordRateLimitBlocked
+} from './rate-limit/index';
 export { closeRedisClient, getRedisClient } from './redis/index';
 export type {
   StorageAdapter,

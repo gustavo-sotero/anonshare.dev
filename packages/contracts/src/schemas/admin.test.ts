@@ -253,6 +253,37 @@ describe('operational anomaly admin schemas', () => {
         missing_object: 1,
         lifecycle_job_overdue: 1
       },
+      reportTotals: {
+        total: 3,
+        byStatus: {
+          pending: 2,
+          resolved: 1,
+          dismissed: 0
+        }
+      },
+      abuseMetrics: {
+        windowDays: 14,
+        reportsByDay: [
+          { day: '2026-03-01', count: 1 },
+          { day: '2026-03-02', count: 0 }
+        ],
+        autoHiddenByDay: [
+          { day: '2026-03-01', count: 0 },
+          { day: '2026-03-02', count: 1 }
+        ],
+        resolvedReportsByDay: [
+          { day: '2026-03-01', count: 0 },
+          { day: '2026-03-02', count: 1 }
+        ],
+        dismissedReportsByDay: [
+          { day: '2026-03-01', count: 1 },
+          { day: '2026-03-02', count: 0 }
+        ],
+        rateLimitBlockedByDay: [
+          { day: '2026-03-01', count: 0 },
+          { day: '2026-03-02', count: 2 }
+        ]
+      },
       queueHealth: [
         {
           queue: 'expire-file',

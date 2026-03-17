@@ -18,11 +18,35 @@ export const LIFECYCLE_JOB_RETENTION = {
 } as const;
 
 /**
+ * Periodic reconcile runs should retry quickly on transient failures instead of
+ * waiting for the next hourly scheduler tick.
+ */
+export const RECONCILE_JOB_ATTEMPTS = 3;
+
+/**
+ * Exponential backoff base delay for recurring reconcile jobs.
+ */
+export const RECONCILE_JOB_BACKOFF_DELAY_MS = 5_000;
+
+/**
+ * Default lifetime for one-time download presigned URLs.
+ * Shared so API delivery and cleanup delay stay aligned.
+ */
+export const DOWNLOAD_URL_EXPIRY_SECONDS = 15 * 60;
+
+/**
+ * Extra grace period applied before one-time cleanup to account for
+ * client/network jitter near URL expiration.
+ */
+export const DOWNLOAD_URL_EXPIRY_GRACE_SECONDS = 60;
+
+/**
  * One-time downloads are delivered through a short-lived presigned URL.
  * Cleanup must wait until that delivery window has elapsed so the worker does
  * not delete the object before the recipient can actually fetch it.
  */
-export const ONE_TIME_DOWNLOAD_CLEANUP_DELAY_MS = 16 * 60 * 1_000;
+export const ONE_TIME_DOWNLOAD_CLEANUP_DELAY_MS =
+  (DOWNLOAD_URL_EXPIRY_SECONDS + DOWNLOAD_URL_EXPIRY_GRACE_SECONDS) * 1_000;
 
 /**
  * Minimal job payload schemas shared between the API (job producers) and the

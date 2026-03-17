@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   getSystemSettingDefault,
+  loadSystemSettingOrDefault,
   parseSystemSettingValue,
   parseSystemSettingValueByKey,
   resolveSystemSetting,
@@ -63,5 +64,57 @@ describe('system setting parsing', () => {
     expect(() => resolveSystemSetting('reportRateLimitPerHour', 'abc')).toThrow(
       'report_rate_limit_per_hour'
     );
+  });
+});
+
+describe('loadSystemSettingOrDefault', () => {
+  test('returns the stored value when the settings row exists', async () => {
+    const db = {
+      query: {
+        systemSettings: {
+          findFirst: async () => ({ key: 'upload_rate_limit_per_hour', value: '45' })
+        }
+      }
+    } as unknown as Parameters<typeof loadSystemSettingOrDefault>[0];
+
+    await expect(loadSystemSettingOrDefault(db, 'uploadRateLimitPerHour')).resolves.toBe(45);
+  });
+
+  test('falls back to the default when the settings row is missing', async () => {
+    const db = {
+      query: {
+        systemSettings: {
+          findFirst: async () => null
+        }
+      }
+    } as unknown as Parameters<typeof loadSystemSettingOrDefault>[0];
+
+    await expect(loadSystemSettingOrDefault(db, 'reportRateLimitPerHour')).resolves.toBe(10);
+  });
+
+  test('falls back to the default when the stored value is invalid', async () => {
+    const db = {
+      query: {
+        systemSettings: {
+          findFirst: async () => ({ key: 'download_rate_limit_per_minute', value: 'abc' })
+        }
+      }
+    } as unknown as Parameters<typeof loadSystemSettingOrDefault>[0];
+
+    await expect(loadSystemSettingOrDefault(db, 'downloadRateLimitPerMinute')).resolves.toBe(30);
+  });
+
+  test('falls back to the default when the query throws', async () => {
+    const db = {
+      query: {
+        systemSettings: {
+          findFirst: async () => {
+            throw new Error('query failed');
+          }
+        }
+      }
+    } as unknown as Parameters<typeof loadSystemSettingOrDefault>[0];
+
+    await expect(loadSystemSettingOrDefault(db, 'reportAutoHideThreshold')).resolves.toBe(3);
   });
 });

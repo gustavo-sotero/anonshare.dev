@@ -1,11 +1,33 @@
 import type { OperationalAnomalySeverity } from '@anonshare/contracts';
+import {
+  adminFileListQuerySchema,
+  adminReportListQuerySchema,
+  moderationActionSchema,
+  resolveReportSchema
+} from '@anonshare/contracts';
 import { auth as authConfig } from '@anonshare/infrastructure/config';
 import { createDb } from '@anonshare/infrastructure/db';
-import { adminSessions, operationalAnomalies } from '@anonshare/infrastructure/db/schema';
+import {
+  adminSessions,
+  fileModerationActions,
+  files,
+  operationalAnomalies,
+  reports
+} from '@anonshare/infrastructure/db/schema';
 import { logger } from '@anonshare/infrastructure/logger';
-import { desc, eq, isNull, sql } from 'drizzle-orm';
+import {
+  listRateLimitBlockedCountsByDay,
+  RATE_LIMIT_BLOCKED_METRIC_SURFACES
+} from '@anonshare/infrastructure/rate-limit';
+import { getRedisClient } from '@anonshare/infrastructure/redis';
+import { and, asc, count, desc, eq, gte, isNotNull, isNull, sql } from 'drizzle-orm';
 import { type Context, Hono } from 'hono';
-import { getCleanupQueue, getExpireQueue, getReconcileQueue } from '../queues';
+import {
+  enqueueCleanupFileJob,
+  getCleanupQueue,
+  getExpireQueue,
+  getReconcileQueue
+} from '../queues';
 
 const ADMIN_SESSION_COOKIE_NAME = 'anonshare_admin_session';
 const DEFAULT_ANOMALY_LIMIT = 50;
@@ -33,6 +55,16 @@ type AnomalyRecord = {
 
 type AnomalyCountRecord = {
   type: typeof operationalAnomalies.$inferSelect.type;
+  count: number;
+};
+
+type ReportStatusCountRecord = {
+  status: typeof reports.$inferSelect.status;
+  count: number;
+};
+
+type DailyCountRecord = {
+  day: string;
   count: number;
 };
 
@@ -72,6 +104,7 @@ type QueueStatsReader = {
 };
 
 const QUEUE_READ_TIMEOUT_MS = 3_000;
+const ABUSE_METRICS_WINDOW_DAYS = 14;
 
 class QueueReadTimeoutError extends Error {
   constructor(queueName: string, operation: string, timeoutMs: number) {
@@ -84,9 +117,20 @@ export type AdminRouterDeps = {
   findSessionById?: (sessionId: string) => Promise<SessionRecord | null>;
   listAnomalies?: (limit: number) => Promise<AnomalyRecord[]>;
   listOpenAnomalyCounts?: () => Promise<AnomalyCountRecord[]>;
+  listReportStatusCounts?: () => Promise<ReportStatusCountRecord[]>;
+  listReportCountsByDay?: (startInclusiveUtc: Date) => Promise<DailyCountRecord[]>;
+  listAutoHiddenCountsByDay?: (startInclusiveUtc: Date) => Promise<DailyCountRecord[]>;
+  listResolvedReportCountsByDay?: (startInclusiveUtc: Date) => Promise<DailyCountRecord[]>;
+  listDismissedReportCountsByDay?: (startInclusiveUtc: Date) => Promise<DailyCountRecord[]>;
+  listRateLimitBlockedCountsByDay?: (
+    startInclusiveUtc: Date,
+    windowDays: number
+  ) => Promise<DailyCountRecord[]>;
   getAllowedGithubUserId?: () => string;
   getQueues?: () => QueueStatsReader[];
   now?: () => Date;
+  enqueueCleanupFile?: (fileId: string, objectKey: string, delayMs?: number) => Promise<void>;
+  getDb?: () => ReturnType<typeof createDb>;
 };
 
 let _db: ReturnType<typeof createDb> | null = null;
@@ -292,6 +336,51 @@ function normalizeQueueName(name: string): LifecycleQueueName {
   }
 }
 
+function startOfUtcDay(value: Date): Date {
+  return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
+}
+
+function formatUtcDay(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+function buildDailySeries(
+  rows: DailyCountRecord[],
+  startInclusiveUtc: Date,
+  windowDays: number
+): DailyCountRecord[] {
+  const byDay = new Map(rows.map((row) => [row.day, row.count]));
+  const series: DailyCountRecord[] = [];
+
+  for (let dayOffset = 0; dayOffset < windowDays; dayOffset += 1) {
+    const currentDay = new Date(startInclusiveUtc);
+    currentDay.setUTCDate(startInclusiveUtc.getUTCDate() + dayOffset);
+    const day = formatUtcDay(currentDay);
+
+    series.push({ day, count: byDay.get(day) ?? 0 });
+  }
+
+  return series;
+}
+
+function resolveRestoredFileStatus(params: {
+  file: typeof files.$inferSelect;
+  latestHiddenPreviousStatus: typeof files.$inferSelect.status | null;
+  now: Date;
+}): typeof files.$inferSelect.status {
+  const { file, latestHiddenPreviousStatus, now } = params;
+
+  if (file.expiresAt && file.expiresAt <= now) {
+    return 'expired';
+  }
+
+  if (latestHiddenPreviousStatus === 'active' || latestHiddenPreviousStatus === 'expiring') {
+    return latestHiddenPreviousStatus;
+  }
+
+  return 'active';
+}
+
 async function defaultFindSessionById(sessionId: string): Promise<SessionRecord | null> {
   const session = await getDb().query.adminSessions.findFirst({
     where: eq(adminSessions.id, sessionId)
@@ -326,6 +415,108 @@ async function defaultListOpenAnomalyCounts(): Promise<AnomalyCountRecord[]> {
     .from(operationalAnomalies)
     .where(isNull(operationalAnomalies.resolvedAt))
     .groupBy(operationalAnomalies.type);
+}
+
+async function defaultListReportStatusCounts(): Promise<ReportStatusCountRecord[]> {
+  return getDb()
+    .select({
+      status: reports.status,
+      count: sql<number>`count(*)::int`
+    })
+    .from(reports)
+    .groupBy(reports.status);
+}
+
+async function defaultListReportCountsByDay(startInclusiveUtc: Date): Promise<DailyCountRecord[]> {
+  const dayBucket = sql<string>`to_char(date_trunc('day', timezone('UTC', ${reports.createdAt})), 'YYYY-MM-DD')`;
+
+  return getDb()
+    .select({
+      day: dayBucket,
+      count: sql<number>`count(*)::int`
+    })
+    .from(reports)
+    .where(gte(reports.createdAt, startInclusiveUtc))
+    .groupBy(dayBucket)
+    .orderBy(asc(dayBucket));
+}
+
+async function defaultListAutoHiddenCountsByDay(
+  startInclusiveUtc: Date
+): Promise<DailyCountRecord[]> {
+  const dayBucket = sql<string>`to_char(date_trunc('day', timezone('UTC', ${fileModerationActions.createdAt})), 'YYYY-MM-DD')`;
+
+  return getDb()
+    .select({
+      day: dayBucket,
+      count: sql<number>`count(*)::int`
+    })
+    .from(fileModerationActions)
+    .where(
+      and(
+        eq(fileModerationActions.action, 'hide'),
+        eq(fileModerationActions.actorGithubLogin, 'system:auto_hide'),
+        gte(fileModerationActions.createdAt, startInclusiveUtc)
+      )
+    )
+    .groupBy(dayBucket)
+    .orderBy(asc(dayBucket));
+}
+
+async function defaultListResolvedReportCountsByDay(
+  startInclusiveUtc: Date
+): Promise<DailyCountRecord[]> {
+  const dayBucket = sql<string>`to_char(date_trunc('day', timezone('UTC', ${reports.resolvedAt})), 'YYYY-MM-DD')`;
+
+  return getDb()
+    .select({
+      day: dayBucket,
+      count: sql<number>`count(*)::int`
+    })
+    .from(reports)
+    .where(
+      and(
+        eq(reports.status, 'resolved'),
+        isNotNull(reports.resolvedAt),
+        gte(reports.resolvedAt, startInclusiveUtc)
+      )
+    )
+    .groupBy(dayBucket)
+    .orderBy(asc(dayBucket));
+}
+
+async function defaultListDismissedReportCountsByDay(
+  startInclusiveUtc: Date
+): Promise<DailyCountRecord[]> {
+  const dayBucket = sql<string>`to_char(date_trunc('day', timezone('UTC', ${reports.resolvedAt})), 'YYYY-MM-DD')`;
+
+  return getDb()
+    .select({
+      day: dayBucket,
+      count: sql<number>`count(*)::int`
+    })
+    .from(reports)
+    .where(
+      and(
+        eq(reports.status, 'dismissed'),
+        isNotNull(reports.resolvedAt),
+        gte(reports.resolvedAt, startInclusiveUtc)
+      )
+    )
+    .groupBy(dayBucket)
+    .orderBy(asc(dayBucket));
+}
+
+async function defaultListRateLimitBlockedCountsByDay(
+  startInclusiveUtc: Date,
+  windowDays: number
+): Promise<DailyCountRecord[]> {
+  return listRateLimitBlockedCountsByDay(
+    getRedisClient(),
+    RATE_LIMIT_BLOCKED_METRIC_SURFACES,
+    startInclusiveUtc,
+    windowDays
+  );
 }
 
 function defaultGetQueues(): QueueStatsReader[] {
@@ -373,7 +564,7 @@ async function readQueueMetric<T>(params: {
 async function requireAdminSession(
   c: Context,
   deps: Required<AdminRouterDeps>
-): Promise<Response | undefined> {
+): Promise<{ ok: true; session: SessionRecord } | { ok: false; response: Response }> {
   const requestId = getRequestId(c);
   const sessionId = getSessionId(c);
 
@@ -386,7 +577,7 @@ async function requireAdminSession(
       outcome: 'failure',
       reason: 'session_required'
     });
-    return c.json(accessDeniedBody('session_required'), 401);
+    return { ok: false, response: c.json(accessDeniedBody('session_required'), 401) };
   }
 
   let session: SessionRecord | null;
@@ -401,7 +592,7 @@ async function requireAdminSession(
       outcome: 'failure',
       error: err instanceof Error ? err.message : String(err)
     });
-    return c.json({ error: 'internal_error' }, 500);
+    return { ok: false, response: c.json({ error: 'internal_error' }, 500) };
   }
 
   if (!session || session.revokedAt) {
@@ -413,7 +604,7 @@ async function requireAdminSession(
       outcome: 'failure',
       reason: 'session_required'
     });
-    return c.json(accessDeniedBody('session_required'), 401);
+    return { ok: false, response: c.json(accessDeniedBody('session_required'), 401) };
   }
 
   if (session.expiresAt <= deps.now()) {
@@ -425,7 +616,7 @@ async function requireAdminSession(
       outcome: 'failure',
       reason: 'session_expired'
     });
-    return c.json(accessDeniedBody('session_expired'), 401);
+    return { ok: false, response: c.json(accessDeniedBody('session_expired'), 401) };
   }
 
   if (session.githubId !== deps.getAllowedGithubUserId()) {
@@ -437,10 +628,10 @@ async function requireAdminSession(
       outcome: 'failure',
       reason: 'not_allowlisted'
     });
-    return c.json(accessDeniedBody('not_allowlisted'), 403);
+    return { ok: false, response: c.json(accessDeniedBody('not_allowlisted'), 403) };
   }
 
-  return undefined;
+  return { ok: true, session };
 }
 
 async function buildQueueHealthSnapshot(queue: QueueStatsReader, nowMs: number, requestId: string) {
@@ -508,9 +699,20 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
     findSessionById: deps.findSessionById ?? defaultFindSessionById,
     listAnomalies: deps.listAnomalies ?? defaultListAnomalies,
     listOpenAnomalyCounts: deps.listOpenAnomalyCounts ?? defaultListOpenAnomalyCounts,
+    listReportStatusCounts: deps.listReportStatusCounts ?? defaultListReportStatusCounts,
+    listReportCountsByDay: deps.listReportCountsByDay ?? defaultListReportCountsByDay,
+    listAutoHiddenCountsByDay: deps.listAutoHiddenCountsByDay ?? defaultListAutoHiddenCountsByDay,
+    listResolvedReportCountsByDay:
+      deps.listResolvedReportCountsByDay ?? defaultListResolvedReportCountsByDay,
+    listDismissedReportCountsByDay:
+      deps.listDismissedReportCountsByDay ?? defaultListDismissedReportCountsByDay,
+    listRateLimitBlockedCountsByDay:
+      deps.listRateLimitBlockedCountsByDay ?? defaultListRateLimitBlockedCountsByDay,
     getAllowedGithubUserId: deps.getAllowedGithubUserId ?? authConfig.githubAllowedUserId,
     getQueues: deps.getQueues ?? defaultGetQueues,
-    now: deps.now ?? (() => new Date())
+    now: deps.now ?? (() => new Date()),
+    enqueueCleanupFile: deps.enqueueCleanupFile ?? enqueueCleanupFileJob,
+    getDb: deps.getDb ?? getDb
   };
 
   const router = new Hono();
@@ -560,9 +762,9 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
   });
 
   router.get('/anomalies', async (c) => {
-    const denied = await requireAdminSession(c, resolvedDeps);
-    if (denied) {
-      return denied;
+    const auth = await requireAdminSession(c, resolvedDeps);
+    if (!auth.ok) {
+      return auth.response;
     }
 
     try {
@@ -597,19 +799,50 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
   });
 
   router.get('/stats', async (c) => {
-    const denied = await requireAdminSession(c, resolvedDeps);
-    if (denied) {
-      return denied;
+    const auth = await requireAdminSession(c, resolvedDeps);
+    if (!auth.ok) {
+      return auth.response;
     }
 
     try {
-      const nowMs = resolvedDeps.now().getTime();
+      const now = resolvedDeps.now();
+      const nowMs = now.getTime();
+      const metricsStart = startOfUtcDay(now);
+      metricsStart.setUTCDate(metricsStart.getUTCDate() - (ABUSE_METRICS_WINDOW_DAYS - 1));
       const requestId = getRequestId(c);
-      const [anomalyCounts, queueHealth] = await Promise.all([
+      const [
+        anomalyCounts,
+        queueHealth,
+        reportStatusCounts,
+        reportCountsByDay,
+        autoHiddenCountsByDay,
+        resolvedReportCountsByDay,
+        dismissedReportCountsByDay,
+        rateLimitBlockedCountsByDay
+      ] = await Promise.all([
         resolvedDeps.listOpenAnomalyCounts(),
         Promise.all(
           resolvedDeps.getQueues().map((queue) => buildQueueHealthSnapshot(queue, nowMs, requestId))
-        )
+        ),
+        resolvedDeps.listReportStatusCounts(),
+        resolvedDeps.listReportCountsByDay(metricsStart),
+        resolvedDeps.listAutoHiddenCountsByDay(metricsStart),
+        resolvedDeps.listResolvedReportCountsByDay(metricsStart),
+        resolvedDeps.listDismissedReportCountsByDay(metricsStart),
+        resolvedDeps
+          .listRateLimitBlockedCountsByDay(metricsStart, ABUSE_METRICS_WINDOW_DAYS)
+          .catch((err) => {
+            logger.warn('Admin rate-limit metrics degraded', {
+              event: 'admin_rate_limit_metrics_degraded',
+              requestId,
+              actor: 'admin',
+              entity: { type: 'http_request', id: c.req.path },
+              outcome: 'failure',
+              error: err instanceof Error ? err.message : String(err)
+            });
+
+            return [];
+          })
       ]);
 
       const openAnomaliesByType = Object.fromEntries(
@@ -617,10 +850,53 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
       );
       const openAnomaliesTotal = anomalyCounts.reduce((sum, row) => sum + row.count, 0);
 
+      const reportTotals = {
+        total: 0,
+        byStatus: {
+          pending: 0,
+          resolved: 0,
+          dismissed: 0
+        }
+      };
+
+      for (const row of reportStatusCounts) {
+        reportTotals.total += row.count;
+        if (row.status === 'pending' || row.status === 'resolved' || row.status === 'dismissed') {
+          reportTotals.byStatus[row.status] = row.count;
+        }
+      }
+
+      const abuseMetrics = {
+        windowDays: ABUSE_METRICS_WINDOW_DAYS,
+        reportsByDay: buildDailySeries(reportCountsByDay, metricsStart, ABUSE_METRICS_WINDOW_DAYS),
+        autoHiddenByDay: buildDailySeries(
+          autoHiddenCountsByDay,
+          metricsStart,
+          ABUSE_METRICS_WINDOW_DAYS
+        ),
+        resolvedReportsByDay: buildDailySeries(
+          resolvedReportCountsByDay,
+          metricsStart,
+          ABUSE_METRICS_WINDOW_DAYS
+        ),
+        dismissedReportsByDay: buildDailySeries(
+          dismissedReportCountsByDay,
+          metricsStart,
+          ABUSE_METRICS_WINDOW_DAYS
+        ),
+        rateLimitBlockedByDay: buildDailySeries(
+          rateLimitBlockedCountsByDay,
+          metricsStart,
+          ABUSE_METRICS_WINDOW_DAYS
+        )
+      };
+
       return c.json(
         {
           openAnomaliesTotal,
           openAnomaliesByType,
+          reportTotals,
+          abuseMetrics,
           queueHealth
         },
         200
@@ -638,8 +914,497 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
     }
   });
 
-  router.get('/files', (c) => c.json({ error: 'not_implemented' }, 501));
-  router.get('/reports', (c) => c.json({ error: 'not_implemented' }, 501));
+  router.get('/files', async (c) => {
+    const auth = await requireAdminSession(c, resolvedDeps);
+    if (!auth.ok) return auth.response;
+
+    const requestId = getRequestId(c);
+
+    const queryParsed = adminFileListQuerySchema.safeParse({
+      status: c.req.query('status'),
+      page: c.req.query('page'),
+      pageSize: c.req.query('pageSize')
+    });
+
+    if (!queryParsed.success) {
+      return c.json(
+        { ok: false, error: { code: 'validation_error', message: 'Invalid query parameters.' } },
+        400
+      );
+    }
+
+    const { status, page, pageSize } = queryParsed.data;
+    const offset = (page - 1) * pageSize;
+
+    try {
+      const db = resolvedDeps.getDb();
+      const where = status ? eq(files.status, status) : undefined;
+
+      const [rows, [totalRow]] = await Promise.all([
+        db
+          .select()
+          .from(files)
+          .where(where)
+          .orderBy(desc(files.uploadedAt))
+          .limit(pageSize)
+          .offset(offset),
+        db.select({ total: count() }).from(files).where(where)
+      ]);
+
+      return c.json(
+        {
+          files: rows.map((f) => ({
+            id: f.id,
+            token: f.token,
+            sanitizedFilename: f.sanitizedFilename,
+            mimeType: f.mimeType,
+            sizeBytes: f.sizeBytes,
+            status: f.status,
+            reportCount: f.reportCount,
+            allowPreview: f.allowPreview,
+            oneTimeDownload: f.oneTimeDownload,
+            expiresAt: f.expiresAt?.toISOString() ?? null,
+            uploadedAt: f.uploadedAt.toISOString(),
+            activatedAt: f.activatedAt?.toISOString() ?? null,
+            consumedAt: f.consumedAt?.toISOString() ?? null,
+            deletedAt: f.deletedAt?.toISOString() ?? null
+          })),
+          total: totalRow?.total ?? 0,
+          page,
+          pageSize
+        },
+        200
+      );
+    } catch (err) {
+      logger.error('Admin files list failed', {
+        event: 'admin_files_list_failed',
+        requestId,
+        actor: 'admin',
+        entity: { type: 'http_request', id: c.req.path },
+        outcome: 'failure',
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return c.json({ error: 'internal_error' }, 500);
+    }
+  });
+
+  router.get('/files/:id', async (c) => {
+    const auth = await requireAdminSession(c, resolvedDeps);
+    if (!auth.ok) return auth.response;
+
+    const requestId = getRequestId(c);
+    const fileId = c.req.param('id');
+
+    try {
+      const db = resolvedDeps.getDb();
+
+      const file = await db.query.files.findFirst({ where: eq(files.id, fileId) });
+      if (!file) {
+        return c.json({ ok: false, error: { code: 'not_found', message: 'File not found.' } }, 404);
+      }
+
+      const [fileReports, moderationHistory] = await Promise.all([
+        db
+          .select()
+          .from(reports)
+          .where(eq(reports.fileId, fileId))
+          .orderBy(desc(reports.createdAt)),
+        db
+          .select()
+          .from(fileModerationActions)
+          .where(eq(fileModerationActions.fileId, fileId))
+          .orderBy(desc(fileModerationActions.createdAt))
+      ]);
+
+      return c.json(
+        {
+          file: {
+            id: file.id,
+            token: file.token,
+            sanitizedFilename: file.sanitizedFilename,
+            mimeType: file.mimeType,
+            sizeBytes: file.sizeBytes,
+            status: file.status,
+            reportCount: file.reportCount,
+            allowPreview: file.allowPreview,
+            oneTimeDownload: file.oneTimeDownload,
+            expiresAt: file.expiresAt?.toISOString() ?? null,
+            uploadedAt: file.uploadedAt.toISOString(),
+            activatedAt: file.activatedAt?.toISOString() ?? null,
+            consumedAt: file.consumedAt?.toISOString() ?? null,
+            deletedAt: file.deletedAt?.toISOString() ?? null,
+            reports: fileReports.map((r) => ({
+              id: r.id,
+              fileId: r.fileId,
+              reason: r.reason,
+              message: r.message,
+              status: r.status,
+              resolvedBy: r.resolvedBy,
+              resolvedAt: r.resolvedAt?.toISOString() ?? null,
+              createdAt: r.createdAt.toISOString()
+            })),
+            moderationHistory: moderationHistory.map((m) => ({
+              id: m.id,
+              action: m.action,
+              previousStatus: m.previousStatus,
+              nextStatus: m.nextStatus,
+              actorGithubLogin: m.actorGithubLogin,
+              reason: m.reason,
+              createdAt: m.createdAt.toISOString()
+            }))
+          }
+        },
+        200
+      );
+    } catch (err) {
+      logger.error('Admin file detail failed', {
+        event: 'admin_file_detail_failed',
+        requestId,
+        actor: 'admin',
+        entity: { type: 'file', id: fileId },
+        outcome: 'failure',
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return c.json({ error: 'internal_error' }, 500);
+    }
+  });
+
+  router.post('/files/:id/moderate', async (c) => {
+    const auth = await requireAdminSession(c, resolvedDeps);
+    if (!auth.ok) return auth.response;
+
+    const requestId = getRequestId(c);
+    const fileId = c.req.param('id');
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json(
+        { ok: false, error: { code: 'validation_error', message: 'Request body must be JSON.' } },
+        400
+      );
+    }
+
+    const parsedBody = moderationActionSchema.safeParse(body);
+    if (!parsedBody.success) {
+      return c.json(
+        { ok: false, error: { code: 'validation_error', message: 'Invalid moderation action.' } },
+        400
+      );
+    }
+
+    const { action, reason } = parsedBody.data;
+
+    const actorGithubId = auth.session.githubId;
+    const actorGithubLogin = auth.session.githubLogin;
+
+    try {
+      const db = resolvedDeps.getDb();
+      const now = resolvedDeps.now();
+
+      const file = await db.query.files.findFirst({ where: eq(files.id, fileId) });
+      if (!file) {
+        return c.json({ ok: false, error: { code: 'not_found', message: 'File not found.' } }, 404);
+      }
+
+      // Determine the valid target status for each action.
+      let nextStatus: typeof file.status;
+      let latestHiddenPreviousStatus: typeof file.status | null = null;
+
+      if (action === 'hide') {
+        if (file.status === 'hidden') {
+          return c.json(
+            { ok: false, error: { code: 'conflict', message: 'File is already hidden.' } },
+            409
+          );
+        }
+        if (file.status === 'deleted') {
+          return c.json(
+            { ok: false, error: { code: 'conflict', message: 'Cannot hide a deleted file.' } },
+            409
+          );
+        }
+        nextStatus = 'hidden';
+      } else if (action === 'restore') {
+        if (file.status !== 'hidden') {
+          return c.json(
+            {
+              ok: false,
+              error: { code: 'conflict', message: 'Only hidden files can be restored.' }
+            },
+            409
+          );
+        }
+
+        const [latestHideAction] = await db
+          .select({ previousStatus: fileModerationActions.previousStatus })
+          .from(fileModerationActions)
+          .where(
+            and(
+              eq(fileModerationActions.fileId, fileId),
+              eq(fileModerationActions.nextStatus, 'hidden')
+            )
+          )
+          .orderBy(desc(fileModerationActions.createdAt))
+          .limit(1);
+
+        latestHiddenPreviousStatus = latestHideAction?.previousStatus ?? null;
+        nextStatus = resolveRestoredFileStatus({
+          file,
+          latestHiddenPreviousStatus,
+          now
+        });
+      } else {
+        // delete
+        if (file.status === 'deleted') {
+          return c.json(
+            { ok: false, error: { code: 'conflict', message: 'File is already deleted.' } },
+            409
+          );
+        }
+        nextStatus = 'deleted';
+      }
+
+      const previousStatus = file.status;
+
+      await db.transaction(async (tx) => {
+        const updateSet: Partial<typeof files.$inferInsert> = { status: nextStatus };
+        if (nextStatus === 'deleted') {
+          updateSet.deletedAt = now;
+        }
+
+        await tx.update(files).set(updateSet).where(eq(files.id, fileId));
+
+        await tx.insert(fileModerationActions).values({
+          fileId,
+          action,
+          previousStatus,
+          nextStatus,
+          actorGithubId,
+          actorGithubLogin,
+          reason: reason ?? null,
+          createdAt: now
+        });
+      });
+
+      logger.info('Admin moderation action applied', {
+        event:
+          action === 'hide'
+            ? 'file.hidden'
+            : action === 'restore'
+              ? 'file.restored'
+              : 'file.deleted',
+        requestId,
+        actor: 'admin',
+        entity: { type: 'file', id: fileId },
+        outcome: 'success',
+        action,
+        previousStatus,
+        nextStatus,
+        restoredFrom: latestHiddenPreviousStatus
+      });
+
+      // If deleting or restoring into an already-expired lifecycle state,
+      // ensure the storage cleanup path is active.
+      if (nextStatus === 'deleted' || nextStatus === 'expired') {
+        resolvedDeps.enqueueCleanupFile(fileId, file.objectKey).catch((err) => {
+          logger.warn('Admin moderation: cleanup enqueue failed (reconciler will repair)', {
+            event: 'admin_cleanup_enqueue_failed',
+            requestId,
+            actor: 'admin',
+            entity: { type: 'file', id: fileId },
+            outcome: 'failure',
+            reason: nextStatus === 'expired' ? 'restored_to_expired' : 'deleted',
+            error: err instanceof Error ? err.message : String(err)
+          });
+        });
+      }
+
+      return c.json(
+        {
+          ok: true as const,
+          data: { fileId, previousStatus, nextStatus }
+        },
+        200
+      );
+    } catch (err) {
+      logger.error('Admin moderation action failed', {
+        event: 'admin_moderation_action_failed',
+        requestId,
+        actor: 'admin',
+        entity: { type: 'file', id: fileId },
+        outcome: 'failure',
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return c.json({ error: 'internal_error' }, 500);
+    }
+  });
+
+  router.get('/reports', async (c) => {
+    const auth = await requireAdminSession(c, resolvedDeps);
+    if (!auth.ok) return auth.response;
+
+    const requestId = getRequestId(c);
+
+    const queryParsed = adminReportListQuerySchema.safeParse({
+      status: c.req.query('status'),
+      fileId: c.req.query('fileId'),
+      page: c.req.query('page'),
+      pageSize: c.req.query('pageSize')
+    });
+
+    if (!queryParsed.success) {
+      return c.json(
+        { ok: false, error: { code: 'validation_error', message: 'Invalid query parameters.' } },
+        400
+      );
+    }
+
+    const { status, fileId, page, pageSize } = queryParsed.data;
+    const offset = (page - 1) * pageSize;
+
+    try {
+      const db = resolvedDeps.getDb();
+
+      const conditions = [
+        status ? eq(reports.status, status) : null,
+        fileId ? eq(reports.fileId, fileId) : null
+      ].filter(Boolean);
+
+      const where =
+        conditions.length > 0
+          ? and(...(conditions as [ReturnType<typeof eq>, ...ReturnType<typeof eq>[]]))
+          : undefined;
+
+      const [rows, [totalRow]] = await Promise.all([
+        db
+          .select()
+          .from(reports)
+          .where(where)
+          .orderBy(desc(reports.createdAt))
+          .limit(pageSize)
+          .offset(offset),
+        db.select({ total: count() }).from(reports).where(where)
+      ]);
+
+      return c.json(
+        {
+          reports: rows.map((r) => ({
+            id: r.id,
+            fileId: r.fileId,
+            reason: r.reason,
+            message: r.message,
+            status: r.status,
+            resolvedBy: r.resolvedBy,
+            resolvedAt: r.resolvedAt?.toISOString() ?? null,
+            createdAt: r.createdAt.toISOString()
+          })),
+          total: totalRow?.total ?? 0,
+          page,
+          pageSize
+        },
+        200
+      );
+    } catch (err) {
+      logger.error('Admin reports list failed', {
+        event: 'admin_reports_list_failed',
+        requestId,
+        actor: 'admin',
+        entity: { type: 'http_request', id: c.req.path },
+        outcome: 'failure',
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return c.json({ error: 'internal_error' }, 500);
+    }
+  });
+
+  router.post('/reports/:id/resolve', async (c) => {
+    const auth = await requireAdminSession(c, resolvedDeps);
+    if (!auth.ok) return auth.response;
+
+    const requestId = getRequestId(c);
+    const reportId = c.req.param('id');
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json(
+        { ok: false, error: { code: 'validation_error', message: 'Request body must be JSON.' } },
+        400
+      );
+    }
+
+    const parsedBody = resolveReportSchema.safeParse(body);
+    if (!parsedBody.success) {
+      return c.json(
+        { ok: false, error: { code: 'validation_error', message: 'Invalid resolution action.' } },
+        400
+      );
+    }
+
+    const { action } = parsedBody.data;
+    const resolverLogin = auth.session.githubLogin;
+
+    try {
+      const db = resolvedDeps.getDb();
+      const now = resolvedDeps.now();
+
+      const report = await db.query.reports.findFirst({ where: eq(reports.id, reportId) });
+      if (!report) {
+        return c.json(
+          { ok: false, error: { code: 'not_found', message: 'Report not found.' } },
+          404
+        );
+      }
+
+      if (report.status !== 'pending') {
+        return c.json(
+          { ok: false, error: { code: 'conflict', message: 'Report has already been resolved.' } },
+          409
+        );
+      }
+
+      await db
+        .update(reports)
+        .set({
+          status: action,
+          resolvedBy: resolverLogin,
+          resolvedAt: now
+        })
+        .where(eq(reports.id, reportId));
+
+      logger.info('Report resolved', {
+        event: action === 'resolved' ? 'report.resolved' : 'report.dismissed',
+        requestId,
+        actor: 'admin',
+        entity: { type: 'report', id: reportId },
+        outcome: 'success',
+        fileId: report.fileId,
+        action,
+        resolvedBy: resolverLogin
+      });
+
+      return c.json(
+        {
+          ok: true as const,
+          data: { reportId, status: action, resolvedAt: now.toISOString() }
+        },
+        200
+      );
+    } catch (err) {
+      logger.error('Admin report resolve failed', {
+        event: 'admin_report_resolve_failed',
+        requestId,
+        actor: 'admin',
+        entity: { type: 'report', id: reportId },
+        outcome: 'failure',
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return c.json({ error: 'internal_error' }, 500);
+    }
+  });
 
   return router;
 }

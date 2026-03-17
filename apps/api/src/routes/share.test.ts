@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { API_ERROR_CODES } from '@anonshare/contracts';
+import type { Redis } from '@anonshare/infrastructure/redis';
 import { Hono } from 'hono';
 import { createShareRouter, type ShareRouterDeps } from './share';
 
@@ -139,6 +140,44 @@ function buildApp(deps?: ShareRouterDeps): Hono {
   const app = new Hono();
   app.route('/share', createShareRouter(deps));
   return app;
+}
+
+/**
+ * Minimal Redis double for share route rate-limit path testing.
+ * `count` is the value returned by INCR — anything > the limit triggers a 429.
+ */
+function makeRedis(
+  opts: {
+    count?: number;
+    counts?: number[];
+    shouldThrow?: boolean;
+    onIncr?: (key: string) => void;
+  } = {}
+): Redis {
+  const count = opts.count ?? 1;
+  const counts = opts.counts;
+  const shouldThrow = opts.shouldThrow ?? false;
+  const onIncr = opts.onIncr;
+  let call = 0;
+  return {
+    incr: async (key: string) => {
+      if (shouldThrow) {
+        throw new Error('redis unavailable');
+      }
+
+      onIncr?.(key);
+
+      if (counts && counts.length > 0) {
+        const next = counts[Math.min(call, counts.length - 1)];
+        call += 1;
+        return next ?? count;
+      }
+
+      return count;
+    },
+    expire: async () => 1,
+    ttl: async () => 59
+  } as unknown as Redis;
 }
 
 async function request(app: Hono, path: string): Promise<Response> {
@@ -283,6 +322,81 @@ describe('GET /share/:token — metadata', () => {
     expect(res.status).toBe(500);
     const body = (await res.json()) as { ok: boolean; error: { code: string } };
     expect(body.error.code).toBe(API_ERROR_CODES.INTERNAL_ERROR);
+  });
+
+  test('returns 429 when per-IP metadata rate limit is exceeded', async () => {
+    const app = buildApp({
+      ...makeMockDeps({ findFirst: makeFileRow() }),
+      getRedis: () => makeRedis({ count: 31 })
+    });
+
+    const res = await app.request('http://localhost/share/Abc123defghijkl012', {
+      method: 'GET',
+      headers: { 'x-forwarded-for': '10.0.0.1' }
+    });
+
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as { ok: boolean; error: { code: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe(API_ERROR_CODES.RATE_LIMITED);
+  });
+
+  test('uses the configured download rate limit loader for metadata requests', async () => {
+    const app = buildApp({
+      ...makeMockDeps({ findFirst: makeFileRow() }),
+      getRedis: () => makeRedis({ count: 6 }),
+      loadDownloadRateLimit: async () => 5
+    });
+
+    const res = await app.request('http://localhost/share/Abc123defghijkl012', {
+      method: 'GET',
+      headers: { 'x-forwarded-for': '10.0.0.1' }
+    });
+
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as { ok: boolean; error: { code: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe(API_ERROR_CODES.RATE_LIMITED);
+  });
+
+  test('returns 429 when per-token metadata rate limit is exceeded', async () => {
+    const redis = makeRedis({ counts: [1, 13] });
+    const app = buildApp({
+      ...makeMockDeps({ findFirst: makeFileRow() }),
+      // First increment (per-IP) passes, second increment (per-token) exceeds limit.
+      getRedis: () => redis
+    });
+
+    const res = await app.request('http://localhost/share/Abc123defghijkl012', {
+      method: 'GET',
+      headers: { 'x-forwarded-for': '10.0.0.1' }
+    });
+
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as { ok: boolean; error: { code: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe(API_ERROR_CODES.RATE_LIMITED);
+  });
+
+  test('bypasses metadata rate limiting when no IP header is present', async () => {
+    const app = buildApp(makeMockDeps({ findFirst: makeFileRow() }));
+    const res = await request(app, '/share/Abc123defghijkl012');
+
+    expect(res.status).toBe(200);
+  });
+
+  test('continues metadata response when rate limiter backend is unavailable', async () => {
+    const app = buildApp({
+      ...makeMockDeps({ findFirst: makeFileRow() }),
+      getRedis: () => makeRedis({ shouldThrow: true })
+    });
+
+    const res = await app.request('http://localhost/share/Abc123defghijkl012', {
+      method: 'GET',
+      headers: { 'x-forwarded-for': '10.0.0.1' }
+    });
+
+    expect(res.status).toBe(200);
   });
 });
 
@@ -900,14 +1014,16 @@ describe('GET /share/:token/preview', () => {
 // ── Cache-Control headers ─────────────────────────────────────────────────────
 
 describe('Cache-Control headers', () => {
-  test('metadata 200 includes private max-age cache header', async () => {
+  test('metadata 200 enforces mandatory revalidation cache header', async () => {
     const app = buildApp(makeMockDeps({ findFirst: makeFileRow() }));
     const res = await request(app, '/share/Abc123defghijkl012');
 
     expect(res.status).toBe(200);
     const cc = res.headers.get('cache-control');
     expect(cc).toContain('private');
-    expect(cc).toContain('max-age=60');
+    expect(cc).toContain('no-cache');
+    expect(cc).toContain('max-age=0');
+    expect(cc).toContain('must-revalidate');
   });
 
   test('metadata 404 sends no-store cache header', async () => {
@@ -930,6 +1046,23 @@ describe('Cache-Control headers', () => {
     const res = await request(app, '/share/Abc123defghijkl012');
 
     expect(res.headers.get('cache-control')).toBe('no-store');
+  });
+
+  test('metadata reflects hidden state on subsequent request after moderation transition', async () => {
+    const app = buildApp(makeMockDeps({ findFirst: makeFileRow({ status: 'active' }) }));
+
+    const first = await request(app, '/share/Abc123defghijkl012');
+    expect(first.status).toBe(200);
+    expect(first.headers.get('cache-control')).toContain('must-revalidate');
+
+    const secondApp = buildApp(makeMockDeps({ findFirst: makeFileRow({ status: 'hidden' }) }));
+    const second = await request(secondApp, '/share/Abc123defghijkl012');
+
+    expect(second.status).toBe(410);
+    expect(second.headers.get('cache-control')).toBe('no-store');
+    const body = (await second.json()) as { ok: boolean; error: { code: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe(API_ERROR_CODES.FILE_HIDDEN);
   });
 
   test('download 200 sends no-store cache header', async () => {
@@ -1030,5 +1163,199 @@ describe('POST /share/:token/download/ack', () => {
     const res = await ack(app, 'Abc123defghijkl012');
 
     expect(res.status).toBe(204);
+  });
+});
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+
+describe('GET /share/:token/download — rate limiting', () => {
+  // SHARE_DOWNLOAD_RATE_LIMIT = 30 req/min; a count of 31 exceeds it.
+  const OVER_LIMIT = 31;
+
+  test('returns 429 when per-IP download rate limit is exceeded', async () => {
+    const app = buildApp({
+      ...makeMockDeps({ findFirst: makeFileRow() }),
+      getRedis: () => makeRedis({ count: OVER_LIMIT })
+    });
+
+    const res = await app.request('http://localhost/share/Abc123defghijkl012/download', {
+      method: 'GET',
+      headers: { 'x-forwarded-for': '10.0.0.1' }
+    });
+
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as { ok: boolean; error: { code: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe(API_ERROR_CODES.RATE_LIMITED);
+  });
+
+  test('returns 429 when per-token download rate limit is exceeded', async () => {
+    const redis = makeRedis({ counts: [1, OVER_LIMIT] });
+    const app = buildApp({
+      ...makeMockDeps({ findFirst: makeFileRow() }),
+      // First increment (per-IP) passes, second increment (per-token) exceeds limit.
+      getRedis: () => redis
+    });
+
+    const res = await app.request('http://localhost/share/Abc123defghijkl012/download', {
+      method: 'GET',
+      headers: { 'x-forwarded-for': '10.0.0.1' }
+    });
+
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as { ok: boolean; error: { code: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe(API_ERROR_CODES.RATE_LIMITED);
+  });
+
+  test('bypasses rate limiting when no IP header is present', async () => {
+    // No x-forwarded-for / x-real-ip header → ipHash is null → rate check is skipped.
+    // No Redis double injected — if it were called it would throw.
+    const app = buildApp(makeMockDeps({ findFirst: makeFileRow(), updateReturn: [] }));
+    const res = await request(app, '/share/Abc123defghijkl012/download');
+
+    // Standard non-one-time file proceeds to presign step.
+    // Default signedUrl in makeMockDeps → 200 with a presigned URL.
+    expect(res.status).toBe(200);
+  });
+
+  test('continues download when rate limiter backend is unavailable', async () => {
+    const app = buildApp({
+      ...makeMockDeps({ findFirst: makeFileRow() }),
+      getRedis: () => makeRedis({ shouldThrow: true })
+    });
+
+    const res = await app.request('http://localhost/share/Abc123defghijkl012/download', {
+      method: 'GET',
+      headers: { 'x-forwarded-for': '10.0.0.1' }
+    });
+
+    expect(res.status).toBe(200);
+  });
+});
+
+describe('GET /share/:token/preview — rate limiting', () => {
+  // SHARE_DOWNLOAD_RATE_LIMIT = 30 req/min; a count of 31 exceeds it.
+  const OVER_LIMIT = 31;
+
+  test('returns 429 when per-IP preview rate limit is exceeded', async () => {
+    const app = buildApp({
+      ...makeMockDeps({
+        findFirst: makeFileRow({
+          allowPreview: true,
+          mimeType: 'image/png',
+          oneTimeDownload: false
+        })
+      }),
+      getRedis: () => makeRedis({ count: OVER_LIMIT })
+    });
+
+    const res = await app.request('http://localhost/share/Abc123defghijkl012/preview', {
+      method: 'GET',
+      headers: { 'x-forwarded-for': '10.0.0.1' }
+    });
+
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as { ok: boolean; error: { code: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe(API_ERROR_CODES.RATE_LIMITED);
+  });
+
+  test('returns 429 when per-token preview rate limit is exceeded', async () => {
+    const redis = makeRedis({ counts: [1, OVER_LIMIT] });
+    const app = buildApp({
+      ...makeMockDeps({
+        findFirst: makeFileRow({
+          allowPreview: true,
+          mimeType: 'image/png',
+          oneTimeDownload: false
+        })
+      }),
+      // First increment (per-IP) passes, second increment (per-token) exceeds limit.
+      getRedis: () => redis
+    });
+
+    const res = await app.request('http://localhost/share/Abc123defghijkl012/preview', {
+      method: 'GET',
+      headers: { 'x-forwarded-for': '10.0.0.1' }
+    });
+
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as { ok: boolean; error: { code: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe(API_ERROR_CODES.RATE_LIMITED);
+  });
+
+  test('bypasses preview rate limiting when no IP header is present', async () => {
+    const app = buildApp(
+      makeMockDeps(
+        {
+          findFirst: makeFileRow({
+            allowPreview: true,
+            mimeType: 'image/png',
+            oneTimeDownload: false
+          })
+        },
+        { signedUrl: 'https://storage.example.com/preview' }
+      )
+    );
+
+    const res = await request(app, '/share/Abc123defghijkl012/preview');
+    expect(res.status).toBe(200);
+  });
+
+  test('continues preview when rate limiter backend is unavailable', async () => {
+    const app = buildApp({
+      ...makeMockDeps(
+        {
+          findFirst: makeFileRow({
+            allowPreview: true,
+            mimeType: 'image/png',
+            oneTimeDownload: false
+          })
+        },
+        { signedUrl: 'https://storage.example.com/preview' }
+      ),
+      getRedis: () => makeRedis({ shouldThrow: true })
+    });
+
+    const res = await app.request('http://localhost/share/Abc123defghijkl012/preview', {
+      method: 'GET',
+      headers: { 'x-forwarded-for': '10.0.0.1' }
+    });
+
+    expect(res.status).toBe(200);
+  });
+
+  test('uses preview-specific per-IP limiter key namespace', async () => {
+    const incrKeys: string[] = [];
+    const app = buildApp({
+      ...makeMockDeps(
+        {
+          findFirst: makeFileRow({
+            allowPreview: true,
+            mimeType: 'image/png',
+            oneTimeDownload: false
+          })
+        },
+        { signedUrl: 'https://storage.example.com/preview' }
+      ),
+      getRedis: () =>
+        makeRedis({
+          onIncr: (key) => {
+            incrKeys.push(key);
+          }
+        })
+    });
+
+    const res = await app.request('http://localhost/share/Abc123defghijkl012/preview', {
+      method: 'GET',
+      headers: { 'x-forwarded-for': '10.0.0.1' }
+    });
+
+    expect(res.status).toBe(200);
+    expect(incrKeys[0]?.startsWith('rl:preview:')).toBe(true);
+    expect(incrKeys.some((key) => key.startsWith('rl:download:'))).toBe(false);
+    expect(incrKeys.some((key) => key.startsWith('rl:share_token:'))).toBe(true);
   });
 });

@@ -1,10 +1,19 @@
 import {
   type AdminAnomaliesResponse,
+  type AdminFileDetail,
+  type AdminFileDetailResponse,
+  type AdminFileListResponse,
+  type AdminFileSummary,
   type AdminLifecycleStatsResponse,
+  type AdminReportListResponse,
+  type AdminReportSummary,
   type AdminSession,
   type AdminSessionResponse,
   adminAnomaliesResponseSchema,
+  adminFileDetailResponseSchema,
+  adminFileListResponseSchema,
   adminLifecycleStatsResponseSchema,
+  adminReportListResponseSchema,
   adminSessionResponseSchema,
   type OperationalAnomalySummary,
   type QueueHealthSnapshot
@@ -29,8 +38,15 @@ type DashboardState =
       session: AdminSession;
       stats: AdminLifecycleStatsResponse;
       anomalies: OperationalAnomalySummary[];
+      hiddenFiles: AdminFileSummary[];
+      hiddenFilesTotal: number;
+      reports: AdminReportSummary[];
+      reportsTotal: number;
       refreshedAt: string;
     };
+
+const REPORT_PAGE_SIZE = 12;
+const HIDDEN_FILE_PAGE_SIZE = 8;
 
 const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
   dateStyle: 'medium',
@@ -52,6 +68,27 @@ async function parseJsonBody(response: Response): Promise<unknown> {
   }
 }
 
+function extractErrorMessage(body: unknown, fallback: string): string {
+  if (typeof body !== 'object' || body === null) {
+    return fallback;
+  }
+
+  if ('message' in body && typeof (body as { message: unknown }).message === 'string') {
+    return (body as { message: string }).message;
+  }
+
+  if (
+    'error' in body &&
+    typeof (body as { error: unknown }).error === 'object' &&
+    (body as { error: Record<string, unknown> }).error !== null &&
+    typeof (body as { error: { message?: unknown } }).error.message === 'string'
+  ) {
+    return (body as { error: { message: string } }).error.message;
+  }
+
+  return fallback;
+}
+
 async function fetchAdminJson(url: string, signal: AbortSignal): Promise<unknown> {
   const response = await fetch(url, {
     headers: { accept: 'application/json' },
@@ -65,13 +102,7 @@ async function fetchAdminJson(url: string, signal: AbortSignal): Promise<unknown
   }
 
   if (!response.ok) {
-    const message =
-      typeof body === 'object' &&
-      body !== null &&
-      'message' in body &&
-      typeof (body as { message: unknown }).message === 'string'
-        ? (body as { message: string }).message
-        : `Request failed with status ${response.status}.`;
+    const message = extractErrorMessage(body, `Request failed with status ${response.status}.`);
     throw new Error(message);
   }
 
@@ -111,6 +142,48 @@ async function fetchAdminAnomalies(signal: AbortSignal): Promise<AdminAnomaliesR
   return parsed.data;
 }
 
+async function fetchAdminReports(signal: AbortSignal): Promise<AdminReportListResponse> {
+  const body = await fetchAdminJson(
+    `/api/admin/reports?status=pending&page=1&pageSize=${REPORT_PAGE_SIZE}`,
+    signal
+  );
+
+  const parsed = adminReportListResponseSchema.safeParse(body);
+  if (!parsed.success) {
+    throw new Error('Admin reports response validation failed.');
+  }
+
+  return parsed.data;
+}
+
+async function fetchAdminHiddenFiles(signal: AbortSignal): Promise<AdminFileListResponse> {
+  const body = await fetchAdminJson(
+    `/api/admin/files?status=hidden&page=1&pageSize=${HIDDEN_FILE_PAGE_SIZE}`,
+    signal
+  );
+
+  const parsed = adminFileListResponseSchema.safeParse(body);
+  if (!parsed.success) {
+    throw new Error('Admin hidden files response validation failed.');
+  }
+
+  return parsed.data;
+}
+
+async function fetchAdminFileDetail(
+  fileId: string,
+  signal: AbortSignal
+): Promise<AdminFileDetailResponse> {
+  const body = await fetchAdminJson(`/api/admin/files/${fileId}`, signal);
+
+  const parsed = adminFileDetailResponseSchema.safeParse(body);
+  if (!parsed.success) {
+    throw new Error('Admin file detail response validation failed.');
+  }
+
+  return parsed.data;
+}
+
 async function loadDashboardState(signal: AbortSignal): Promise<DashboardState> {
   const sessionResponse = await fetchAdminSession(signal);
 
@@ -118,16 +191,23 @@ async function loadDashboardState(signal: AbortSignal): Promise<DashboardState> 
     return { kind: 'unauthenticated' };
   }
 
-  const [statsResponse, anomaliesResponse] = await Promise.all([
-    fetchAdminStats(signal),
-    fetchAdminAnomalies(signal)
-  ]);
+  const [statsResponse, anomaliesResponse, reportsResponse, hiddenFilesResponse] =
+    await Promise.all([
+      fetchAdminStats(signal),
+      fetchAdminAnomalies(signal),
+      fetchAdminReports(signal),
+      fetchAdminHiddenFiles(signal)
+    ]);
 
   return {
     kind: 'ready',
     session: sessionResponse.session,
     stats: statsResponse,
     anomalies: anomaliesResponse.anomalies,
+    hiddenFiles: hiddenFilesResponse.files,
+    hiddenFilesTotal: hiddenFilesResponse.total,
+    reports: reportsResponse.reports,
+    reportsTotal: reportsResponse.total,
     refreshedAt: new Date().toISOString()
   };
 }
@@ -162,6 +242,29 @@ function formatPercent(value: number): string {
 
 function formatCount(value: number): string {
   return new Intl.NumberFormat().format(value);
+}
+
+function formatFileBytes(value: number): string {
+  if (value < 1024) {
+    return `${formatCount(value)} bytes`;
+  }
+
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let size = value;
+  let unitIndex = -1;
+
+  do {
+    size /= 1024;
+    unitIndex += 1;
+  } while (size >= 1024 && unitIndex < units.length - 1);
+
+  return `${new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: size >= 100 ? 0 : 1
+  }).format(size)} ${units[unitIndex]}`;
+}
+
+function formatOptionalDateTime(value: string | null): string {
+  return value ? formatDateTime(value) : 'n/a';
 }
 
 function formatAnomalyType(type: OperationalAnomalySummary['type']): string {
@@ -212,6 +315,18 @@ function getAnomalyDetails(details: OperationalAnomalySummary['details']) {
   return Object.entries(details ?? {})
     .filter(([key]) => key !== 'severity' && key !== 'fingerprint')
     .slice(0, 4);
+}
+
+function formatReportReason(reason: AdminReportSummary['reason']): string {
+  return reason.replaceAll('_', ' ');
+}
+
+function formatFileStatus(status: AdminFileSummary['status']): string {
+  return status.replaceAll('_', ' ');
+}
+
+function formatModerationTransition(previousStatus: string, nextStatus: string): string {
+  return `${formatFileStatus(previousStatus as AdminFileSummary['status'])} → ${formatFileStatus(nextStatus as AdminFileSummary['status'])}`;
 }
 
 function QueueCard({ queue }: { queue: QueueHealthSnapshot }) {
@@ -328,6 +443,14 @@ function AdminLifecyclePage() {
   const [state, setState] = useState<DashboardState>({ kind: 'loading' });
   const [refreshKey, setRefreshKey] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [reportActionPendingId, setReportActionPendingId] = useState<string | null>(null);
+  const [reportActionError, setReportActionError] = useState<string | null>(null);
+  const [fileActionPendingId, setFileActionPendingId] = useState<string | null>(null);
+  const [fileActionError, setFileActionError] = useState<string | null>(null);
+  const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
+  const [selectedFileDetail, setSelectedFileDetail] = useState<AdminFileDetail | null>(null);
+  const [selectedFileDetailError, setSelectedFileDetailError] = useState<string | null>(null);
+  const [isFileDetailLoading, setIsFileDetailLoading] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -366,7 +489,132 @@ function AdminLifecyclePage() {
     return () => controller.abort();
   }, [refreshKey]);
 
+  useEffect(() => {
+    const detailSnapshot = state.kind === 'ready' ? state.refreshedAt : null;
+
+    if (!selectedFileId || !detailSnapshot) {
+      if (!selectedFileId) {
+        setSelectedFileDetail(null);
+        setSelectedFileDetailError(null);
+        setIsFileDetailLoading(false);
+      }
+      return;
+    }
+
+    const controller = new AbortController();
+    setIsFileDetailLoading(true);
+    setSelectedFileDetailError(null);
+
+    fetchAdminFileDetail(selectedFileId, controller.signal)
+      .then((response) => {
+        setSelectedFileDetail(response.file);
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        if (error instanceof AdminAccessError) {
+          setState({ kind: 'unauthenticated' });
+          return;
+        }
+
+        setSelectedFileDetail(null);
+        setSelectedFileDetailError(
+          error instanceof Error ? error.message : 'Failed to load file inspection detail.'
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setIsFileDetailLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [selectedFileId, state]);
+
   const refresh = () => setRefreshKey((current) => current + 1);
+  const openFileDetail = (fileId: string) => {
+    setSelectedFileId(fileId);
+  };
+
+  const resolveReport = async (reportId: string, action: 'resolved' | 'dismissed') => {
+    setReportActionPendingId(reportId);
+    setReportActionError(null);
+
+    try {
+      const response = await fetch(`/api/admin/reports/${reportId}/resolve`, {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json'
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({ action })
+      });
+      const body = await parseJsonBody(response);
+
+      if (response.status === 401 || response.status === 403) {
+        throw new AdminAccessError();
+      }
+
+      if (!response.ok) {
+        throw new Error(extractErrorMessage(body, 'Failed to resolve report.'));
+      }
+
+      refresh();
+    } catch (error: unknown) {
+      if (error instanceof AdminAccessError) {
+        setState({ kind: 'unauthenticated' });
+        return;
+      }
+
+      setReportActionError(
+        error instanceof Error ? error.message : 'Failed to resolve report action.'
+      );
+    } finally {
+      setReportActionPendingId(null);
+    }
+  };
+
+  const moderateFile = async (fileId: string, action: 'hide' | 'restore' | 'delete') => {
+    setFileActionPendingId(fileId);
+    setFileActionError(null);
+
+    try {
+      const response = await fetch(`/api/admin/files/${fileId}/moderate`, {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json'
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({ action })
+      });
+      const body = await parseJsonBody(response);
+
+      if (response.status === 401 || response.status === 403) {
+        throw new AdminAccessError();
+      }
+
+      if (!response.ok) {
+        throw new Error(extractErrorMessage(body, 'Failed to update file moderation state.'));
+      }
+
+      refresh();
+    } catch (error: unknown) {
+      if (error instanceof AdminAccessError) {
+        setState({ kind: 'unauthenticated' });
+        return;
+      }
+
+      setFileActionError(
+        error instanceof Error ? error.message : 'Failed to update file moderation state.'
+      );
+    } finally {
+      setFileActionPendingId(null);
+    }
+  };
 
   const queueFailures =
     state.kind === 'ready'
@@ -380,12 +628,32 @@ function AdminLifecyclePage() {
     state.kind === 'ready'
       ? state.stats.queueHealth.reduce((max, queue) => Math.max(max, queue.lagMs), 0)
       : 0;
+  const reportsInWindow =
+    state.kind === 'ready'
+      ? state.stats.abuseMetrics.reportsByDay.reduce((sum, row) => sum + row.count, 0)
+      : 0;
+  const autoHiddenInWindow =
+    state.kind === 'ready'
+      ? state.stats.abuseMetrics.autoHiddenByDay.reduce((sum, row) => sum + row.count, 0)
+      : 0;
+  const resolvedReportsInWindow =
+    state.kind === 'ready'
+      ? state.stats.abuseMetrics.resolvedReportsByDay.reduce((sum, row) => sum + row.count, 0)
+      : 0;
+  const dismissedReportsInWindow =
+    state.kind === 'ready'
+      ? state.stats.abuseMetrics.dismissedReportsByDay.reduce((sum, row) => sum + row.count, 0)
+      : 0;
+  const rateLimitBlockedInWindow =
+    state.kind === 'ready'
+      ? state.stats.abuseMetrics.rateLimitBlockedByDay.reduce((sum, row) => sum + row.count, 0)
+      : 0;
 
   return (
     <SiteFrame
-      eyebrow="Lifecycle dashboard"
-      title="Queue health, anomaly backlog, and reconciliation signals in one place."
-      summary="Module 5 now feeds the operator surface with lifecycle telemetry from the API boundary: unresolved anomalies, queue lag, and the current state of delayed cleanup work."
+      eyebrow="Operations dashboard"
+      title="Abuse signals, moderation backlog, and lifecycle health in one place."
+      summary="The operator surface now combines moderation decisions, hidden-file recovery, anomaly backlog, and queue telemetry from the API boundary."
       rail={<AdminRail state={state} />}
     >
       {state.kind === 'loading' && (
@@ -454,7 +722,8 @@ function AdminLifecyclePage() {
                 <h2 className="admin-section-title">Lifecycle signals are live.</h2>
                 <p className="panel__copy">
                   Signed in as {state.session.githubLogin}. This surface reads from /api/admin/stats
-                  and /api/admin/anomalies to expose the current lifecycle backlog.
+                  , /api/admin/anomalies, and /api/admin/reports to expose lifecycle and moderation
+                  backlog.
                 </p>
               </div>
 
@@ -499,6 +768,58 @@ function AdminLifecyclePage() {
                 <strong className="metric-card__value">{formatCount(scheduledJobs)}</strong>
                 <p className="metric-card__meta">Jobs waiting for future lifecycle deadlines.</p>
               </article>
+
+              <article className="metric-card">
+                <p className="surface-card__index">
+                  Reports ({state.stats.abuseMetrics.windowDays}d)
+                </p>
+                <strong className="metric-card__value">{formatCount(reportsInWindow)}</strong>
+                <p className="metric-card__meta">Public report volume in the recent window.</p>
+              </article>
+
+              <article className="metric-card">
+                <p className="surface-card__index">
+                  Auto-hidden ({state.stats.abuseMetrics.windowDays}d)
+                </p>
+                <strong className="metric-card__value">{formatCount(autoHiddenInWindow)}</strong>
+                <p className="metric-card__meta">
+                  Files hidden automatically after threshold hits.
+                </p>
+              </article>
+
+              <article className="metric-card">
+                <p className="surface-card__index">
+                  Reports resolved ({state.stats.abuseMetrics.windowDays}d)
+                </p>
+                <strong className="metric-card__value">
+                  {formatCount(resolvedReportsInWindow)}
+                </strong>
+                <p className="metric-card__meta">Reports confirmed and resolved by admin.</p>
+              </article>
+
+              <article className="metric-card">
+                <p className="surface-card__index">
+                  Reports dismissed ({state.stats.abuseMetrics.windowDays}d)
+                </p>
+                <strong className="metric-card__value">
+                  {formatCount(dismissedReportsInWindow)}
+                </strong>
+                <p className="metric-card__meta">
+                  Reports dismissed as false positives or non-actionable.
+                </p>
+              </article>
+
+              <article className="metric-card">
+                <p className="surface-card__index">
+                  Rate-limit blocks ({state.stats.abuseMetrics.windowDays}d)
+                </p>
+                <strong className="metric-card__value">
+                  {formatCount(rateLimitBlockedInWindow)}
+                </strong>
+                <p className="metric-card__meta">
+                  Total blocked requests across upload, report, share, download, and preview.
+                </p>
+              </article>
             </div>
           </section>
 
@@ -513,6 +834,357 @@ function AdminLifecyclePage() {
                 <QueueCard key={queue.queue} queue={queue} />
               ))}
             </div>
+          </section>
+
+          <section className="panel">
+            <div className="panel__row">
+              <p className="panel__label">Report queue</p>
+              <span className="chip chip--outline">
+                {state.reportsTotal === 0
+                  ? 'No pending reports'
+                  : `${formatCount(state.reports.length)} shown / ${formatCount(state.reportsTotal)} pending`}
+              </span>
+            </div>
+
+            {reportActionError ? <p className="upload-error">{reportActionError}</p> : null}
+
+            {state.reports.length === 0 ? (
+              <div className="state-empty">
+                <strong>No pending reports in queue.</strong>
+                <p className="panel__copy">
+                  New public reports will show up here for moderation actions.
+                </p>
+              </div>
+            ) : (
+              <div className="report-queue">
+                {state.reports.map((report) => (
+                  <article key={report.id} className="report-card">
+                    <div className="report-card__header">
+                      <div>
+                        <p className="surface-card__index">{formatReportReason(report.reason)}</p>
+                        <h2>File {report.fileId.slice(0, 8)}</h2>
+                      </div>
+                      <span className="chip chip--outline">{formatDateTime(report.createdAt)}</span>
+                    </div>
+
+                    <p className="panel__copy report-card__message">
+                      {report.message?.trim() || 'No additional context provided.'}
+                    </p>
+
+                    <p className="panel__copy report-card__meta">
+                      Status {report.status} · file {report.fileId.slice(0, 8)}
+                    </p>
+
+                    <div className="report-card__actions">
+                      <button
+                        type="button"
+                        className="button-link button-link--sm"
+                        disabled={isRefreshing || reportActionPendingId === report.id}
+                        onClick={() => resolveReport(report.id, 'resolved')}
+                      >
+                        {reportActionPendingId === report.id ? 'Saving...' : 'Resolve'}
+                      </button>
+                      <button
+                        type="button"
+                        className="button-link button-link--ghost button-link--sm"
+                        disabled={isRefreshing || fileActionPendingId === report.fileId}
+                        onClick={() => moderateFile(report.fileId, 'hide')}
+                      >
+                        {fileActionPendingId === report.fileId ? 'Saving...' : 'Hide file'}
+                      </button>
+                      <button
+                        type="button"
+                        className="button-link button-link--ghost button-link--sm"
+                        disabled={isRefreshing || reportActionPendingId === report.id}
+                        onClick={() => resolveReport(report.id, 'dismissed')}
+                      >
+                        Dismiss
+                      </button>
+                      <button
+                        type="button"
+                        className="button-link button-link--ghost button-link--sm"
+                        disabled={isRefreshing}
+                        onClick={() => openFileDetail(report.fileId)}
+                      >
+                        {selectedFileId === report.fileId ? 'Inspecting' : 'Inspect file'}
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="panel">
+            <div className="panel__row">
+              <p className="panel__label">Hidden files</p>
+              <span className="chip chip--outline">
+                {state.hiddenFilesTotal === 0
+                  ? 'No hidden files'
+                  : `${formatCount(state.hiddenFiles.length)} shown / ${formatCount(state.hiddenFilesTotal)} hidden`}
+              </span>
+            </div>
+
+            {fileActionError ? <p className="upload-error">{fileActionError}</p> : null}
+
+            {state.hiddenFiles.length === 0 ? (
+              <div className="state-empty">
+                <strong>No hidden files waiting for review.</strong>
+                <p className="panel__copy">
+                  Auto-hidden and manually hidden files will appear here for restore or deletion.
+                </p>
+              </div>
+            ) : (
+              <div className="report-queue">
+                {state.hiddenFiles.map((file) => (
+                  <article key={file.id} className="report-card">
+                    <div className="report-card__header">
+                      <div>
+                        <p className="surface-card__index">{formatFileStatus(file.status)}</p>
+                        <h2>{file.sanitizedFilename}</h2>
+                      </div>
+                      <span className="chip chip--outline">
+                        {formatCount(file.reportCount)} reports
+                      </span>
+                    </div>
+
+                    <p className="panel__copy report-card__message">
+                      {formatFileStatus(file.status)} · {formatFileBytes(file.sizeBytes)}
+                      {file.expiresAt
+                        ? ` · expires ${formatDateTime(file.expiresAt)}`
+                        : ' · no expiration'}
+                    </p>
+
+                    <div className="report-card__actions">
+                      <button
+                        type="button"
+                        className="button-link button-link--sm"
+                        disabled={isRefreshing || fileActionPendingId === file.id}
+                        onClick={() => moderateFile(file.id, 'restore')}
+                      >
+                        {fileActionPendingId === file.id ? 'Saving...' : 'Restore'}
+                      </button>
+                      <button
+                        type="button"
+                        className="button-link button-link--ghost button-link--sm"
+                        disabled={isRefreshing || fileActionPendingId === file.id}
+                        onClick={() => moderateFile(file.id, 'delete')}
+                      >
+                        Delete
+                      </button>
+                      <button
+                        type="button"
+                        className="button-link button-link--ghost button-link--sm"
+                        disabled={isRefreshing}
+                        onClick={() => openFileDetail(file.id)}
+                      >
+                        {selectedFileId === file.id ? 'Inspecting' : 'Inspect file'}
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="panel">
+            <div className="panel__row">
+              <p className="panel__label">File inspection</p>
+              <span className="chip chip--outline">
+                {selectedFileId
+                  ? isFileDetailLoading
+                    ? 'Loading detail'
+                    : selectedFileDetail
+                      ? formatFileStatus(selectedFileDetail.status)
+                      : 'Detail unavailable'
+                  : 'Select a file'}
+              </span>
+            </div>
+
+            {!selectedFileId ? (
+              <div className="state-empty">
+                <strong>Select a reported or hidden file.</strong>
+                <p className="panel__copy">
+                  This inspection panel exposes the file status, report trail, and moderation
+                  history already stored by the API.
+                </p>
+              </div>
+            ) : isFileDetailLoading ? (
+              <div className="state-empty">
+                <strong>Loading inspection detail.</strong>
+                <p className="panel__copy">
+                  Fetching the latest report and moderation history for this file.
+                </p>
+              </div>
+            ) : selectedFileDetailError ? (
+              <div className="state-empty">
+                <strong>Inspection detail failed.</strong>
+                <p className="panel__copy">{selectedFileDetailError}</p>
+              </div>
+            ) : selectedFileDetail ? (
+              <div className="admin-detail-stack">
+                <article className="report-card report-card--selected">
+                  <div className="report-card__header">
+                    <div>
+                      <p className="surface-card__index">{selectedFileDetail.sanitizedFilename}</p>
+                      <h2>{formatFileStatus(selectedFileDetail.status)}</h2>
+                    </div>
+                    <div className="report-card__chips">
+                      <span className="chip chip--outline">
+                        {formatCount(selectedFileDetail.reportCount)} reports
+                      </span>
+                      <button
+                        type="button"
+                        className="button-link button-link--ghost button-link--sm"
+                        onClick={() => setSelectedFileId(null)}
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="admin-detail-grid">
+                    <div className="queue-card__stat">
+                      <span>Share token</span>
+                      <strong>{selectedFileDetail.token}</strong>
+                    </div>
+                    <div className="queue-card__stat">
+                      <span>Size</span>
+                      <strong>{formatFileBytes(selectedFileDetail.sizeBytes)}</strong>
+                    </div>
+                    <div className="queue-card__stat">
+                      <span>Uploaded</span>
+                      <strong>{formatDateTime(selectedFileDetail.uploadedAt)}</strong>
+                    </div>
+                    <div className="queue-card__stat">
+                      <span>Expires</span>
+                      <strong>{formatOptionalDateTime(selectedFileDetail.expiresAt)}</strong>
+                    </div>
+                    <div className="queue-card__stat">
+                      <span>Preview</span>
+                      <strong>{selectedFileDetail.allowPreview ? 'Allowed' : 'Blocked'}</strong>
+                    </div>
+                    <div className="queue-card__stat">
+                      <span>One-time download</span>
+                      <strong>{selectedFileDetail.oneTimeDownload ? 'Enabled' : 'Disabled'}</strong>
+                    </div>
+                    <div className="queue-card__stat">
+                      <span>Consumed</span>
+                      <strong>{formatOptionalDateTime(selectedFileDetail.consumedAt)}</strong>
+                    </div>
+                    <div className="queue-card__stat">
+                      <span>Deleted</span>
+                      <strong>{formatOptionalDateTime(selectedFileDetail.deletedAt)}</strong>
+                    </div>
+                  </div>
+                </article>
+
+                <div className="admin-detail-grid admin-detail-grid--columns">
+                  <article className="report-card admin-detail-panel">
+                    <div className="report-card__header">
+                      <div>
+                        <p className="surface-card__index">Report trail</p>
+                        <h2>{formatCount(selectedFileDetail.reports.length)} reports recorded</h2>
+                      </div>
+                    </div>
+
+                    {selectedFileDetail.reports.length === 0 ? (
+                      <div className="state-empty">
+                        <strong>No reports stored for this file.</strong>
+                        <p className="panel__copy">
+                          This file has not accumulated a report trail yet.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="admin-detail-list">
+                        {selectedFileDetail.reports.map((report) => (
+                          <article key={report.id} className="report-card report-card--compact">
+                            <div className="report-card__header">
+                              <div>
+                                <p className="surface-card__index">
+                                  {formatReportReason(report.reason)}
+                                </p>
+                                <h2>{report.status}</h2>
+                              </div>
+                              <span className="chip chip--outline">
+                                {formatDateTime(report.createdAt)}
+                              </span>
+                            </div>
+
+                            <p className="panel__copy report-card__message">
+                              {report.message?.trim() || 'No additional context provided.'}
+                            </p>
+
+                            <dl className="detail-pairs">
+                              <div className="detail-pairs__row">
+                                <dt>Resolved by</dt>
+                                <dd>{report.resolvedBy ?? 'Pending review'}</dd>
+                              </div>
+                              <div className="detail-pairs__row">
+                                <dt>Resolved at</dt>
+                                <dd>{formatOptionalDateTime(report.resolvedAt)}</dd>
+                              </div>
+                            </dl>
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                  </article>
+
+                  <article className="report-card admin-detail-panel">
+                    <div className="report-card__header">
+                      <div>
+                        <p className="surface-card__index">Moderation history</p>
+                        <h2>
+                          {formatCount(selectedFileDetail.moderationHistory.length)} actions logged
+                        </h2>
+                      </div>
+                    </div>
+
+                    {selectedFileDetail.moderationHistory.length === 0 ? (
+                      <div className="state-empty">
+                        <strong>No moderation actions recorded.</strong>
+                        <p className="panel__copy">
+                          Automatic or manual availability changes will appear here.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="admin-detail-list">
+                        {selectedFileDetail.moderationHistory.map((entry) => (
+                          <article key={entry.id} className="report-card report-card--compact">
+                            <div className="report-card__header">
+                              <div>
+                                <p className="surface-card__index">{entry.action}</p>
+                                <h2>
+                                  {formatModerationTransition(
+                                    entry.previousStatus,
+                                    entry.nextStatus
+                                  )}
+                                </h2>
+                              </div>
+                              <span className="chip chip--outline">
+                                {formatDateTime(entry.createdAt)}
+                              </span>
+                            </div>
+
+                            <dl className="detail-pairs">
+                              <div className="detail-pairs__row">
+                                <dt>Actor</dt>
+                                <dd>{entry.actorGithubLogin}</dd>
+                              </div>
+                              <div className="detail-pairs__row">
+                                <dt>Reason</dt>
+                                <dd>{entry.reason ?? 'No internal note.'}</dd>
+                              </div>
+                            </dl>
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                  </article>
+                </div>
+              </div>
+            ) : null}
           </section>
 
           <section className="panel">

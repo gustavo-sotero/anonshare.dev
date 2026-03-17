@@ -3,6 +3,7 @@ import { isPreviewSupported } from '@anonshare/domain';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { useCallback, useEffect, useState } from 'react';
 import { SiteFrame } from '~/components/site-frame';
+import { canReportUnavailableFile } from './share-reporting';
 
 // ─── Loader result type (shared between head, loader, and component) ──────────
 
@@ -357,6 +358,110 @@ function TextPreview({ url }: { url: string }) {
   );
 }
 
+type ReportPhase = 'idle' | 'submitting' | 'success' | 'error';
+
+function PublicReportPanel({
+  reportOpen,
+  reportReason,
+  reportMessage,
+  reportPhase,
+  reportError,
+  onOpen,
+  onReasonChange,
+  onMessageChange,
+  onSubmit,
+  onCancel,
+  copy
+}: {
+  reportOpen: boolean;
+  reportReason: ReportReason;
+  reportMessage: string;
+  reportPhase: ReportPhase;
+  reportError: string | null;
+  onOpen: () => void;
+  onReasonChange: (reason: ReportReason) => void;
+  onMessageChange: (message: string) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+  copy?: string;
+}) {
+  return (
+    <section className="panel panel--muted">
+      {reportPhase === 'success' ? (
+        <p className="panel__copy report-success">
+          &#x2713; Your report has been received. The operator reviews all reports.
+        </p>
+      ) : reportOpen ? (
+        <>
+          <div className="panel__row">
+            <p className="panel__label">Report this file</p>
+          </div>
+          <div className="report-form">
+            <label className="report-form__label">
+              Reason
+              <select
+                className="report-form__select"
+                value={reportReason}
+                onChange={(e) => {
+                  const nextReason = e.target.value;
+                  if (reportReasonValues.includes(nextReason as ReportReason)) {
+                    onReasonChange(nextReason as ReportReason);
+                  }
+                }}
+                disabled={reportPhase === 'submitting'}
+              >
+                {reportReasonValues.map((reason) => (
+                  <option key={reason} value={reason}>
+                    {REPORT_REASON_LABELS[reason]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="report-form__label">
+              Additional context <span className="report-form__optional">(optional)</span>
+              <textarea
+                className="report-form__textarea"
+                value={reportMessage}
+                onChange={(e) => onMessageChange(e.target.value.slice(0, 1000))}
+                placeholder="Describe the issue briefly."
+                rows={3}
+                disabled={reportPhase === 'submitting'}
+              />
+            </label>
+            {reportError && <p className="upload-error">{reportError}</p>}
+            <div className="action-row">
+              <button
+                type="button"
+                className="button-link button-link--sm"
+                disabled={reportPhase === 'submitting'}
+                onClick={onSubmit}
+              >
+                {reportPhase === 'submitting' ? 'Submitting…' : 'Submit report'}
+              </button>
+              <button
+                type="button"
+                className="button-link button-link--ghost button-link--sm"
+                disabled={reportPhase === 'submitting'}
+                onClick={onCancel}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </>
+      ) : (
+        <p className="panel__copy">
+          {copy ?? 'If this file contains illegal or harmful content, you can '}
+          <button type="button" className="inline-btn" onClick={onOpen}>
+            report it
+          </button>
+          . Reports are reviewed by the operator.
+        </p>
+      )}
+    </section>
+  );
+}
+
 // ─── Main share page component ────────────────────────────────────────────────
 
 function SharePage() {
@@ -388,6 +493,12 @@ function SharePage() {
     'idle'
   );
   const [reportError, setReportError] = useState<string | null>(null);
+
+  const closeReportPanel = useCallback(() => {
+    setReportOpen(false);
+    setReportPhase('idle');
+    setReportError(null);
+  }, []);
 
   const triggerDownload = useCallback(
     async (filename: string) => {
@@ -480,6 +591,26 @@ function SharePage() {
     }
   }, [token, previewState]);
 
+  const refreshAvailability = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/share/${token}`, {
+        headers: { accept: 'application/json' }
+      });
+      const body = (await res.json()) as unknown;
+
+      if (res.ok) {
+        setRuntimeUnavailable(null);
+        return;
+      }
+
+      if (isErrorEnvelope(body) && RUNTIME_UNAVAILABLE_CODES.has(body.error.code)) {
+        setRuntimeUnavailable({ code: body.error.code, message: body.error.message });
+      }
+    } catch {
+      // Best effort only; keep existing UI state on transient refresh failures.
+    }
+  }, [token]);
+
   const submitReport = useCallback(async () => {
     if (reportPhase === 'submitting') return;
     setReportPhase('submitting');
@@ -495,9 +626,9 @@ function SharePage() {
         })
       });
 
-      if (res.ok || res.status === 501) {
-        // 200 = submitted successfully; 501 = API not yet wired (Module 6)
+      if (res.ok) {
         setReportPhase('success');
+        void refreshAvailability();
       } else {
         const body = (await res.json()) as unknown;
         const msg = isErrorEnvelope(body)
@@ -510,7 +641,7 @@ function SharePage() {
       setReportError('Failed to submit. Please check your connection.');
       setReportPhase('error');
     }
-  }, [token, reportReason, reportMessage, reportPhase]);
+  }, [token, reportReason, reportMessage, reportPhase, refreshAvailability]);
 
   // Guard: loader is always defined at render time, but TypeScript cannot prove it.
   if (loader === undefined) return null;
@@ -536,6 +667,21 @@ function SharePage() {
             </Link>
           </div>
         </section>
+        {canReportUnavailableFile(code) && (
+          <PublicReportPanel
+            reportOpen={reportOpen}
+            reportReason={reportReason}
+            reportMessage={reportMessage}
+            reportPhase={reportPhase}
+            reportError={reportError}
+            onOpen={() => setReportOpen(true)}
+            onReasonChange={setReportReason}
+            onMessageChange={setReportMessage}
+            onSubmit={submitReport}
+            onCancel={closeReportPanel}
+            copy="If this link contained illegal or harmful content, you can still "
+          />
+        )}
       </SiteFrame>
     );
   }
@@ -560,6 +706,21 @@ function SharePage() {
             </Link>
           </div>
         </section>
+        {canReportUnavailableFile(code) && (
+          <PublicReportPanel
+            reportOpen={reportOpen}
+            reportReason={reportReason}
+            reportMessage={reportMessage}
+            reportPhase={reportPhase}
+            reportError={reportError}
+            onOpen={() => setReportOpen(true)}
+            onReasonChange={setReportReason}
+            onMessageChange={setReportMessage}
+            onSubmit={submitReport}
+            onCancel={closeReportPanel}
+            copy="If this link contained illegal or harmful content, you can still "
+          />
+        )}
       </SiteFrame>
     );
   }
@@ -710,83 +871,18 @@ function SharePage() {
       )}
 
       {/* ── Report link ───────────────────────────────────────────────────── */}
-      <section className="panel panel--muted">
-        {reportPhase === 'success' ? (
-          <p className="panel__copy report-success">
-            &#x2713; Your report has been received. The operator reviews all reports.
-          </p>
-        ) : reportOpen ? (
-          <>
-            <div className="panel__row">
-              <p className="panel__label">Report this file</p>
-            </div>
-            <div className="report-form">
-              <label className="report-form__label">
-                Reason
-                <select
-                  className="report-form__select"
-                  value={reportReason}
-                  onChange={(e) => {
-                    const nextReason = e.target.value;
-                    if (reportReasonValues.includes(nextReason as ReportReason)) {
-                      setReportReason(nextReason as ReportReason);
-                    }
-                  }}
-                  disabled={reportPhase === 'submitting'}
-                >
-                  {reportReasonValues.map((reason) => (
-                    <option key={reason} value={reason}>
-                      {REPORT_REASON_LABELS[reason]}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="report-form__label">
-                Additional context <span className="report-form__optional">(optional)</span>
-                <textarea
-                  className="report-form__textarea"
-                  value={reportMessage}
-                  onChange={(e) => setReportMessage(e.target.value.slice(0, 1000))}
-                  placeholder="Describe the issue briefly."
-                  rows={3}
-                  disabled={reportPhase === 'submitting'}
-                />
-              </label>
-              {reportError && <p className="upload-error">{reportError}</p>}
-              <div className="action-row">
-                <button
-                  type="button"
-                  className="button-link button-link--sm"
-                  disabled={reportPhase === 'submitting'}
-                  onClick={submitReport}
-                >
-                  {reportPhase === 'submitting' ? 'Submitting…' : 'Submit report'}
-                </button>
-                <button
-                  type="button"
-                  className="button-link button-link--ghost button-link--sm"
-                  disabled={reportPhase === 'submitting'}
-                  onClick={() => {
-                    setReportOpen(false);
-                    setReportPhase('idle');
-                    setReportError(null);
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </>
-        ) : (
-          <p className="panel__copy">
-            If this file contains illegal or harmful content, you can{' '}
-            <button type="button" className="inline-btn" onClick={() => setReportOpen(true)}>
-              report it
-            </button>
-            . Reports are reviewed by the operator.
-          </p>
-        )}
-      </section>
+      <PublicReportPanel
+        reportOpen={reportOpen}
+        reportReason={reportReason}
+        reportMessage={reportMessage}
+        reportPhase={reportPhase}
+        reportError={reportError}
+        onOpen={() => setReportOpen(true)}
+        onReasonChange={setReportReason}
+        onMessageChange={setReportMessage}
+        onSubmit={submitReport}
+        onCancel={closeReportPanel}
+      />
     </SiteFrame>
   );
 }

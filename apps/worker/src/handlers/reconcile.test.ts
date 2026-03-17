@@ -21,6 +21,7 @@ afterEach(() => {
 type SelectFileRow = {
   id: string;
   objectKey: string;
+  cursorTimestamp?: Date | null;
   status?: string;
   consumedAt?: Date | null;
   expiresAt?: Date | null;
@@ -30,6 +31,8 @@ type SelectFileRow = {
 type DbStubs = {
   /** Results for each successive db.select().from().where() call across reconcile passes. */
   selectSequence?: SelectFileRow[][];
+  /** Captures every .limit(n) used by select chains. */
+  capturedSelectLimits?: number[];
   /** Results for each successive db.update().returning() call in order. */
   updateSequence?: Array<{ id: string }[]>;
   /** What to return for operationalAnomalies.findFirst (null = no existing). */
@@ -60,10 +63,22 @@ type StorageStubs = {
 };
 
 type CursorStubs = {
-  initialCursor?: string;
-  capturedPersistedCursors?: Array<string | null>;
-  loadShouldThrow?: boolean;
-  persistShouldThrow?: boolean;
+  initialFutureExpirationCursor?: string;
+  capturedPersistedFutureExpirationCursors?: Array<string | null>;
+  futureLoadShouldThrow?: boolean;
+  futurePersistShouldThrow?: boolean;
+  initialMissingObjectCursor?: string;
+  capturedPersistedMissingObjectCursors?: Array<string | null>;
+  missingLoadShouldThrow?: boolean;
+  missingPersistShouldThrow?: boolean;
+  initialTerminalCleanupCursor?: string;
+  capturedPersistedTerminalCleanupCursors?: Array<string | null>;
+  terminalLoadShouldThrow?: boolean;
+  terminalPersistShouldThrow?: boolean;
+  initialOrphanCursor?: string;
+  capturedPersistedOrphanCursors?: Array<string | null>;
+  orphanLoadShouldThrow?: boolean;
+  orphanPersistShouldThrow?: boolean;
 };
 
 type MockedQueueJobState =
@@ -125,29 +140,45 @@ function makeMockDeps(
   let listCallIdx = 0;
   const capturedAnomalies: Array<{ type: string; fileId: string | null; details: unknown }> = [];
   const capturedDeletes: string[] = [];
+  const capturedSelectLimits: number[] = [];
   const capturedCleanupAdds: Array<{ data: CleanupFileJobPayload; opts: QueueAddOptions }> = [];
   const capturedExpireAdds: Array<{ data: ExpireFileJobPayload; opts: QueueAddOptions }> = [];
   const capturedRemovedCleanupJobIds: string[] = [];
   const capturedRemovedExpireJobIds: string[] = [];
   const capturedListOptions: unknown[] = [];
-  const capturedPersistedCursors: Array<string | null> = [];
+  const capturedPersistedFutureExpirationCursors: Array<string | null> = [];
+  const capturedPersistedMissingObjectCursors: Array<string | null> = [];
+  const capturedPersistedTerminalCleanupCursors: Array<string | null> = [];
+  const capturedPersistedOrphanCursors: Array<string | null> = [];
 
   db.capturedAnomalies = capturedAnomalies;
   db.capturedDeletes = capturedDeletes;
+  db.capturedSelectLimits = capturedSelectLimits;
   queues.capturedCleanupAdds = capturedCleanupAdds;
   queues.capturedExpireAdds = capturedExpireAdds;
   queues.capturedRemovedCleanupJobIds = capturedRemovedCleanupJobIds;
   queues.capturedRemovedExpireJobIds = capturedRemovedExpireJobIds;
   storage.capturedListOptions = capturedListOptions;
-  cursor.capturedPersistedCursors = capturedPersistedCursors;
+  cursor.capturedPersistedFutureExpirationCursors = capturedPersistedFutureExpirationCursors;
+  cursor.capturedPersistedMissingObjectCursors = capturedPersistedMissingObjectCursors;
+  cursor.capturedPersistedTerminalCleanupCursors = capturedPersistedTerminalCleanupCursors;
+  cursor.capturedPersistedOrphanCursors = capturedPersistedOrphanCursors;
 
   // Build a thenable+chainable object for select results
   function makeSelectChain(data: SelectFileRow[]) {
     // Extend a real Promise with the extra Drizzle builder chain methods so
     // `await chain`, `.limit(n)`, and `.orderBy(col).limit(n)` all work.
     return Object.assign(Promise.resolve(data), {
-      limit: (_n: number) => Promise.resolve(data),
-      orderBy: (_col: unknown) => ({ limit: (_n: number) => Promise.resolve(data) })
+      limit: (n: number) => {
+        capturedSelectLimits.push(n);
+        return Promise.resolve(data);
+      },
+      orderBy: (_col: unknown) => ({
+        limit: (n: number) => {
+          capturedSelectLimits.push(n);
+          return Promise.resolve(data);
+        }
+      })
     });
   }
 
@@ -322,18 +353,66 @@ function makeMockDeps(
       }
     } as unknown as Queue<ExpireFileJobPayload>,
 
+    getFutureExpirationCursor: async () => {
+      if (cursor.futureLoadShouldThrow) {
+        throw new Error('future cursor load failed');
+      }
+
+      return cursor.initialFutureExpirationCursor;
+    },
+
+    setFutureExpirationCursor: async (value: string | null) => {
+      capturedPersistedFutureExpirationCursors.push(value);
+
+      if (cursor.futurePersistShouldThrow) {
+        throw new Error('future cursor persist failed');
+      }
+    },
+
+    getMissingObjectCursor: async () => {
+      if (cursor.missingLoadShouldThrow) {
+        throw new Error('missing-object cursor load failed');
+      }
+
+      return cursor.initialMissingObjectCursor;
+    },
+
+    setMissingObjectCursor: async (value: string | null) => {
+      capturedPersistedMissingObjectCursors.push(value);
+
+      if (cursor.missingPersistShouldThrow) {
+        throw new Error('missing-object cursor persist failed');
+      }
+    },
+
+    getTerminalCleanupCursor: async () => {
+      if (cursor.terminalLoadShouldThrow) {
+        throw new Error('terminal-cleanup cursor load failed');
+      }
+
+      return cursor.initialTerminalCleanupCursor;
+    },
+
+    setTerminalCleanupCursor: async (value: string | null) => {
+      capturedPersistedTerminalCleanupCursors.push(value);
+
+      if (cursor.terminalPersistShouldThrow) {
+        throw new Error('terminal-cleanup cursor persist failed');
+      }
+    },
+
     getOrphanScanCursor: async () => {
-      if (cursor.loadShouldThrow) {
+      if (cursor.orphanLoadShouldThrow) {
         throw new Error('cursor load failed');
       }
 
-      return cursor.initialCursor;
+      return cursor.initialOrphanCursor;
     },
 
     setOrphanScanCursor: async (value: string | null) => {
-      capturedPersistedCursors.push(value);
+      capturedPersistedOrphanCursors.push(value);
 
-      if (cursor.persistShouldThrow) {
+      if (cursor.orphanPersistShouldThrow) {
         throw new Error('cursor persist failed');
       }
     }
@@ -352,6 +431,18 @@ const OVER_ANOMALY_THRESHOLD_MS = 2 * 60 * 60 * 1000 + 1_000;
 // ── Pass A: Stale expiration tests ────────────────────────────────────────────
 
 describe('reconcile handler — Pass A: stale expirations', () => {
+  test('scans stale expirations in a bounded batch', async () => {
+    const db: DbStubs = {
+      selectSequence: [[], [], []],
+      updateSequence: []
+    };
+    const deps = makeMockDeps(db, {});
+
+    await makeHandleReconcile(deps)(makeJob());
+
+    expect(db.capturedSelectLimits).toContain(200);
+  });
+
   test('transitions active file past expiresAt to expired and enqueues cleanup job', async () => {
     const now = new Date();
     const staleFile: SelectFileRow = {
@@ -500,6 +591,58 @@ describe('reconcile handler — Pass A: stale expirations', () => {
 // ── Pass B: Missing future expiration jobs ──────────────────────────────────
 
 describe('reconcile handler — Pass B: future expiration job repair', () => {
+  test('records an anomaly and clears an invalid future-expiration cursor', async () => {
+    const db: DbStubs = {
+      selectSequence: [[], [], [], [], []],
+      anomalyFindFirstReturn: null
+    };
+    const cursor: CursorStubs = {
+      initialFutureExpirationCursor: 'not-a-valid-cursor'
+    };
+    const deps = makeMockDeps(db, {}, {}, cursor);
+
+    await makeHandleReconcile(deps)(makeJob());
+
+    expect(db.capturedAnomalies).toContainEqual(
+      expect.objectContaining({
+        type: 'reconciliation_scan_incomplete',
+        fileId: null,
+        details: expect.objectContaining({
+          queue: 'reconcile',
+          cursor: 'future_expiration',
+          reason: 'cursor_invalid',
+          rawCursor: 'not-a-valid-cursor'
+        })
+      })
+    );
+    expect(cursor.capturedPersistedFutureExpirationCursors).toContain(null);
+  });
+
+  test('records an anomaly when the future-expiration cursor cannot be loaded', async () => {
+    const db: DbStubs = {
+      selectSequence: [[], [], [], [], []],
+      anomalyFindFirstReturn: null
+    };
+    const cursor: CursorStubs = {
+      futureLoadShouldThrow: true
+    };
+    const deps = makeMockDeps(db, {}, {}, cursor);
+
+    await makeHandleReconcile(deps)(makeJob());
+
+    expect(db.capturedAnomalies).toContainEqual(
+      expect.objectContaining({
+        type: 'reconciliation_scan_incomplete',
+        fileId: null,
+        details: expect.objectContaining({
+          queue: 'reconcile',
+          cursor: 'future_expiration',
+          reason: 'cursor_read_failed'
+        })
+      })
+    );
+  });
+
   test('re-enqueues expire-file when a future-expiring file has no delayed job', async () => {
     const futureFile: SelectFileRow = {
       id: 'future-expire',
@@ -523,6 +666,62 @@ describe('reconcile handler — Pass B: future expiration job repair', () => {
     expect(queues.capturedExpireAdds?.[0]?.opts.removeOnFail).toBe(
       LIFECYCLE_JOB_RETENTION.removeOnFail
     );
+  });
+
+  test('persists a future-expiration cursor when the repair scan fills its batch', async () => {
+    const futureFiles: SelectFileRow[] = Array.from({ length: 100 }, (_, idx) => ({
+      id: `future-batch-${idx}`,
+      objectKey: `objects/future-batch-${idx}`,
+      expiresAt: new Date(Date.parse('2030-01-01T00:00:00.000Z') + idx * 1_000),
+      cursorTimestamp: new Date(Date.parse('2030-01-01T00:00:00.000Z') + idx * 1_000)
+    }));
+    const db: DbStubs = {
+      selectSequence: [[], futureFiles, [], [], []]
+    };
+    const cursor: CursorStubs = {
+      initialFutureExpirationCursor: '2029-12-31T23:59:00.000Z|future-batch-prev'
+    };
+    const deps = makeMockDeps(db, {}, {}, cursor);
+
+    await makeHandleReconcile(deps)(makeJob());
+
+    expect(cursor.capturedPersistedFutureExpirationCursors).toEqual([
+      '2030-01-01T00:01:39.000Z|future-batch-99'
+    ]);
+  });
+
+  test('records an anomaly when future-expiration cursor persistence fails', async () => {
+    const futureFiles: SelectFileRow[] = Array.from({ length: 100 }, (_, idx) => ({
+      id: `future-persist-${idx}`,
+      objectKey: `objects/future-persist-${idx}`,
+      expiresAt: new Date(Date.parse('2031-01-01T00:00:00.000Z') + idx * 1_000),
+      cursorTimestamp: new Date(Date.parse('2031-01-01T00:00:00.000Z') + idx * 1_000)
+    }));
+    const db: DbStubs = {
+      selectSequence: [[], futureFiles, [], [], []],
+      anomalyFindFirstReturn: null
+    };
+    const cursor: CursorStubs = {
+      futurePersistShouldThrow: true
+    };
+    const deps = makeMockDeps(db, {}, {}, cursor);
+
+    await makeHandleReconcile(deps)(makeJob());
+
+    expect(db.capturedAnomalies).toContainEqual(
+      expect.objectContaining({
+        type: 'reconciliation_scan_incomplete',
+        fileId: null,
+        details: expect.objectContaining({
+          queue: 'reconcile',
+          cursor: 'future_expiration',
+          reason: 'cursor_write_failed'
+        })
+      })
+    );
+    expect(cursor.capturedPersistedFutureExpirationCursors).toEqual([
+      '2031-01-01T00:01:39.000Z|future-persist-99'
+    ]);
   });
 
   test('re-enqueues expire-file when existing job is terminal (completed)', async () => {
@@ -792,6 +991,17 @@ describe('reconcile handler — Pass B: stuck pending_upload', () => {
     // Should not throw — just skip and continue
     await expect(makeHandleReconcile(deps)(makeJob())).resolves.toBeUndefined();
     expect(db.capturedDeletes).toHaveLength(0);
+    expect(db.capturedAnomalies).toContainEqual(
+      expect.objectContaining({
+        type: 'reconciliation_scan_incomplete',
+        fileId: 'stuck-storageerr',
+        details: expect.objectContaining({
+          phase: 'stuck_pending',
+          operation: 'exists',
+          reason: 'retry_next_run'
+        })
+      })
+    );
 
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const firstCall = warnSpy.mock.calls.at(0);
@@ -836,6 +1046,28 @@ describe('reconcile handler — Pass B: stuck pending_upload', () => {
 // ── Pass D: Missing storage objects ─────────────────────────────────────────
 
 describe('reconcile handler — Pass C: missing storage objects', () => {
+  test('persists a missing-object cursor when the scan fills its batch', async () => {
+    const activeFiles: SelectFileRow[] = Array.from({ length: 50 }, (_, idx) => ({
+      id: `active-batch-${idx}`,
+      objectKey: `objects/active-batch-${idx}`,
+      uploadedAt: new Date(Date.parse('2026-03-01T00:00:00.000Z') + idx * 1_000),
+      cursorTimestamp: new Date(Date.parse('2026-03-01T00:00:00.000Z') + idx * 1_000)
+    }));
+    const db: DbStubs = {
+      selectSequence: [[], [], [], activeFiles, []]
+    };
+    const cursor: CursorStubs = {
+      initialMissingObjectCursor: '2026-02-28T23:59:00.000Z|active-batch-prev'
+    };
+    const deps = makeMockDeps(db, {}, {}, cursor);
+
+    await makeHandleReconcile(deps)(makeJob());
+
+    expect(cursor.capturedPersistedMissingObjectCursors).toEqual([
+      '2026-03-01T00:00:49.000Z|active-batch-49'
+    ]);
+  });
+
   test('marks active file as missing when storage object is absent', async () => {
     const activeFile: SelectFileRow = {
       id: 'active-missing',
@@ -913,7 +1145,17 @@ describe('reconcile handler — Pass C: missing storage objects', () => {
     const warnSpy = spyOn(logger, 'warn');
 
     await expect(makeHandleReconcile(deps)(makeJob())).resolves.toBeUndefined();
-    expect(db.capturedAnomalies).toHaveLength(0);
+    expect(db.capturedAnomalies).toContainEqual(
+      expect.objectContaining({
+        type: 'reconciliation_scan_incomplete',
+        fileId: 'missing-storageerr',
+        details: expect.objectContaining({
+          phase: 'missing_object',
+          operation: 'exists',
+          reason: 'retry_next_run'
+        })
+      })
+    );
 
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const firstCall = warnSpy.mock.calls.at(0);
@@ -951,6 +1193,35 @@ describe('reconcile handler — Pass C: missing storage objects', () => {
 // ── Pass E: Terminal cleanup repair ─────────────────────────────────────────
 
 describe('reconcile handler — Pass E: terminal cleanup repair', () => {
+  test('persists a terminal-cleanup cursor when the scan fills its batch', async () => {
+    const terminalFiles: SelectFileRow[] = Array.from({ length: 100 }, (_, idx) => ({
+      id: `terminal-batch-${idx}`,
+      objectKey: `objects/terminal-batch-${idx}`,
+      status: 'expired',
+      consumedAt: null,
+      uploadedAt: new Date(Date.parse('2026-03-02T00:00:00.000Z') + idx * 1_000),
+      cursorTimestamp: new Date(Date.parse('2026-03-02T00:00:00.000Z') + idx * 1_000)
+    }));
+    const db: DbStubs = {
+      selectSequence: [[], [], [], [], terminalFiles]
+    };
+    const storage: StorageStubs = {
+      existsResults: Object.fromEntries(
+        terminalFiles.map((file) => [file.objectKey, false] as const)
+      )
+    };
+    const cursor: CursorStubs = {
+      initialTerminalCleanupCursor: '2026-03-01T23:59:00.000Z|terminal-batch-prev'
+    };
+    const deps = makeMockDeps(db, storage, {}, cursor);
+
+    await makeHandleReconcile(deps)(makeJob());
+
+    expect(cursor.capturedPersistedTerminalCleanupCursors).toEqual([
+      '2026-03-02T00:01:39.000Z|terminal-batch-99'
+    ]);
+  });
+
   test('enqueues cleanup for consumed file whose object still exists', async () => {
     const terminalFile: SelectFileRow = {
       id: 'consumed-terminal',
@@ -1055,6 +1326,17 @@ describe('reconcile handler — Pass E: terminal cleanup repair', () => {
     await expect(makeHandleReconcile(deps)(makeJob())).resolves.toBeUndefined();
 
     expect(queues.capturedCleanupAdds).toHaveLength(0);
+    expect(db.capturedAnomalies).toContainEqual(
+      expect.objectContaining({
+        type: 'reconciliation_scan_incomplete',
+        fileId: 'terminal-storageerr',
+        details: expect.objectContaining({
+          phase: 'terminal_cleanup',
+          operation: 'exists',
+          reason: 'retry_next_run'
+        })
+      })
+    );
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const firstCall = warnSpy.mock.calls.at(0);
     expect(firstCall?.[1]).toMatchObject({
@@ -1184,7 +1466,7 @@ describe('reconcile handler — Pass F: orphaned storage objects', () => {
         nextStartAfter: 'objects/orphaned-after-cursor'
       }
     };
-    const cursor: CursorStubs = { initialCursor: 'objects/known-prefix-tail' };
+    const cursor: CursorStubs = { initialOrphanCursor: 'objects/known-prefix-tail' };
     const deps = makeMockDeps(db, storage, {}, cursor);
 
     await makeHandleReconcile(deps)(makeJob());
@@ -1192,7 +1474,7 @@ describe('reconcile handler — Pass F: orphaned storage objects', () => {
     expect(storage.capturedListOptions?.[0]).toMatchObject({
       startAfter: 'objects/known-prefix-tail'
     });
-    expect(cursor.capturedPersistedCursors).toEqual(['objects/orphaned-after-cursor']);
+    expect(cursor.capturedPersistedOrphanCursors).toEqual(['objects/orphaned-after-cursor']);
   });
 
   test('clears the persisted orphan scan cursor when the scan reaches the end of the bucket', async () => {
@@ -1206,12 +1488,12 @@ describe('reconcile handler — Pass F: orphaned storage objects', () => {
         nextStartAfter: null
       }
     };
-    const cursor: CursorStubs = { initialCursor: 'objects/previous-page-tail' };
+    const cursor: CursorStubs = { initialOrphanCursor: 'objects/previous-page-tail' };
     const deps = makeMockDeps(db, storage, {}, cursor);
 
     await makeHandleReconcile(deps)(makeJob());
 
-    expect(cursor.capturedPersistedCursors).toEqual([null]);
+    expect(cursor.capturedPersistedOrphanCursors).toEqual([null]);
   });
 
   test('continues when orphan scan cursor persistence fails after a successful scan', async () => {
@@ -1225,7 +1507,7 @@ describe('reconcile handler — Pass F: orphaned storage objects', () => {
         nextStartAfter: null
       }
     };
-    const cursor: CursorStubs = { persistShouldThrow: true };
+    const cursor: CursorStubs = { orphanPersistShouldThrow: true };
     const deps = makeMockDeps(db, storage, {}, cursor);
     const warnSpy = spyOn(logger, 'warn');
 
@@ -1259,7 +1541,17 @@ describe('reconcile handler — Pass F: orphaned storage objects', () => {
 
     await expect(makeHandleReconcile(deps)(makeJob())).resolves.toBeUndefined();
 
-    expect(db.capturedAnomalies).toHaveLength(0);
+    expect(db.capturedAnomalies).toContainEqual(
+      expect.objectContaining({
+        type: 'reconciliation_scan_incomplete',
+        fileId: null,
+        details: expect.objectContaining({
+          phase: 'orphaned_object_scan',
+          operation: 'list',
+          reason: 'retry_next_run'
+        })
+      })
+    );
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const firstCall = warnSpy.mock.calls.at(0);
     expect(firstCall?.[1]).toMatchObject({

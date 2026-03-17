@@ -11,7 +11,7 @@ import { files, operationalAnomalies, systemSettings } from '@anonshare/infrastr
 import { logger } from '@anonshare/infrastructure/logger';
 import type { storageAdapter } from '@anonshare/infrastructure/storage';
 import type { Job, Queue } from 'bullmq';
-import { and, asc, eq, gt, inArray, isNotNull, isNull, lt, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNotNull, isNull, lt, type SQL, sql } from 'drizzle-orm';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -27,6 +27,11 @@ const PENDING_UPLOAD_STALE_THRESHOLD_MS = 10 * 60 * 1_000; // 10 minutes
  * do not generate noise anomalies.
  */
 const STALE_EXPIRATION_ANOMALY_THRESHOLD_MS = 2 * 60 * 60 * 1_000; // 2 hours
+
+/**
+ * Max number of stale expirations fixed per reconcile run.
+ */
+const STALE_EXPIRATION_BATCH_SIZE = 200;
 
 /**
  * Max number of active/expiring files checked for missing storage objects per
@@ -63,6 +68,9 @@ const LIFECYCLE_DUPLICATE_SCAN_LIMIT = 200;
 const LIFECYCLE_QUEUE_READ_TIMEOUT_MS = 3_000;
 
 const STORAGE_OBJECT_PREFIX = 'objects/';
+const FUTURE_EXPIRATION_CURSOR_SETTING_KEY = 'reconcile_future_expire_cursor';
+const MISSING_OBJECT_CURSOR_SETTING_KEY = 'reconcile_missing_object_cursor';
+const TERMINAL_CLEANUP_CURSOR_SETTING_KEY = 'reconcile_terminal_cleanup_cursor';
 const ORPHAN_SCAN_CURSOR_SETTING_KEY = 'reconcile_orphan_scan_cursor';
 
 class QueueReadTimeoutError extends Error {
@@ -79,6 +87,12 @@ export type ReconcileHandlerDeps = {
   storage: Pick<typeof storageAdapter, 'exists' | 'list'>;
   cleanupQueue: Queue<CleanupFileJobPayload>;
   expireQueue: Queue<ExpireFileJobPayload>;
+  getFutureExpirationCursor?: () => Promise<string | undefined>;
+  setFutureExpirationCursor?: (cursor: string | null) => Promise<void>;
+  getMissingObjectCursor?: () => Promise<string | undefined>;
+  setMissingObjectCursor?: (cursor: string | null) => Promise<void>;
+  getTerminalCleanupCursor?: () => Promise<string | undefined>;
+  setTerminalCleanupCursor?: (cursor: string | null) => Promise<void>;
   getOrphanScanCursor?: () => Promise<string | undefined>;
   setOrphanScanCursor?: (cursor: string | null) => Promise<void>;
 };
@@ -92,6 +106,13 @@ type ReconcileStorageFailurePhase =
 type LifecycleRepairQueue = 'expire-file' | 'cleanup-file';
 
 type QueueLookupResult<T> = { ok: true; value: T } | { ok: false; anomalyRecorded: boolean };
+
+type FileSweepCursorName = 'future_expiration' | 'missing_object' | 'terminal_cleanup';
+
+type FileSweepCursor = {
+  timestamp: Date;
+  id: string;
+};
 
 const PENDING_QUEUE_JOB_STATES = new Set([
   'waiting',
@@ -132,13 +153,14 @@ function withSeverity(
   return { ...details, severity };
 }
 
-function logStorageCheckFailure(params: {
+async function logStorageCheckFailure(params: {
+  db: ReturnType<typeof createDb>;
   phase: ReconcileStorageFailurePhase;
   entity: { type: string; id: string };
   operation: 'exists' | 'list';
   err: unknown;
   objectKey?: string;
-}) {
+}): Promise<boolean> {
   logger.warn('Reconcile: storage check failed; leaving item for next run', {
     event: 'reconciliation.anomaly_detected',
     actor: 'worker',
@@ -151,6 +173,23 @@ function logStorageCheckFailure(params: {
     reason: 'retry_next_run',
     error: params.err instanceof Error ? params.err.message : String(params.err)
   });
+
+  const fileId = params.entity.type === 'file' ? params.entity.id : null;
+
+  return recordScopedAnomalyIfAbsent(
+    params.db,
+    'reconciliation_scan_incomplete',
+    fileId,
+    {
+      queue: 'reconcile',
+      phase: params.phase,
+      operation: params.operation,
+      ...(params.objectKey ? { objectKey: params.objectKey } : {}),
+      reason: 'retry_next_run'
+    },
+    getAnomalySeverity('reconciliation_scan_incomplete'),
+    `reconcile:storage_check_failed:${params.phase}:${params.entity.id}:${params.operation}:${params.objectKey ?? 'none'}`
+  );
 }
 
 function isPendingQueueJobState(state: string): boolean {
@@ -246,6 +285,261 @@ async function getLifecycleJobSafely(params: {
     });
 
     return { ok: false, anomalyRecorded };
+  }
+}
+
+function withOptionalCursorCondition(
+  baseCondition: SQL<unknown>,
+  cursorCondition: SQL<unknown> | undefined
+): SQL<unknown> {
+  if (!cursorCondition) {
+    return baseCondition;
+  }
+
+  return and(baseCondition, cursorCondition) ?? baseCondition;
+}
+
+function buildFileSweepCursorCondition(
+  column: typeof files.uploadedAt | typeof files.expiresAt,
+  cursor: FileSweepCursor | undefined
+): SQL<unknown> | undefined {
+  if (!cursor) {
+    return undefined;
+  }
+
+  return sql`(${column}, ${files.id}) > (${cursor.timestamp.toISOString()}, ${cursor.id})`;
+}
+
+function parseFileSweepCursor(rawCursor: string | undefined): FileSweepCursor | undefined {
+  if (!rawCursor) {
+    return undefined;
+  }
+
+  const separatorIndex = rawCursor.lastIndexOf('|');
+  if (separatorIndex <= 0 || separatorIndex === rawCursor.length - 1) {
+    return undefined;
+  }
+
+  const timestamp = new Date(rawCursor.slice(0, separatorIndex));
+  if (Number.isNaN(timestamp.getTime())) {
+    return undefined;
+  }
+
+  return {
+    timestamp,
+    id: rawCursor.slice(separatorIndex + 1)
+  };
+}
+
+function serializeFileSweepCursor(cursor: FileSweepCursor | null): string | null {
+  if (!cursor) {
+    return null;
+  }
+
+  return `${cursor.timestamp.toISOString()}|${cursor.id}`;
+}
+
+function getNextFileSweepCursor(
+  rows: Array<{ id: string; cursorTimestamp: Date | null }>,
+  batchSize: number
+): FileSweepCursor | null {
+  if (rows.length === 0 || rows.length < batchSize) {
+    return null;
+  }
+
+  const lastRow = rows.at(-1);
+  if (!lastRow?.cursorTimestamp) {
+    return null;
+  }
+
+  return {
+    timestamp: lastRow.cursorTimestamp,
+    id: lastRow.id
+  };
+}
+
+async function readPersistedFileSweepCursor(params: {
+  db: ReturnType<typeof createDb>;
+  settingKey: string;
+}): Promise<FileSweepCursor | undefined> {
+  const setting = await params.db.query.systemSettings.findFirst({
+    where: eq(systemSettings.key, params.settingKey)
+  });
+
+  const rawCursor = setting?.value.trim();
+  if (!rawCursor) {
+    return undefined;
+  }
+
+  return parseFileSweepCursor(rawCursor);
+}
+
+async function writePersistedFileSweepCursor(params: {
+  db: ReturnType<typeof createDb>;
+  settingKey: string;
+  cursor: FileSweepCursor | null;
+}): Promise<void> {
+  const serializedCursor = serializeFileSweepCursor(params.cursor) ?? '';
+
+  await params.db
+    .insert(systemSettings)
+    .values({
+      key: params.settingKey,
+      value: serializedCursor
+    })
+    .onConflictDoUpdate({
+      target: systemSettings.key,
+      set: {
+        value: serializedCursor,
+        updatedAt: sql`now()`
+      }
+    });
+}
+
+async function recordLifecycleSweepCursorIssue(params: {
+  db: ReturnType<typeof createDb>;
+  cursorName: FileSweepCursorName;
+  reason: 'cursor_invalid' | 'cursor_read_failed' | 'cursor_write_failed';
+  rawCursor?: string;
+  error?: unknown;
+}): Promise<boolean> {
+  return recordScopedAnomalyIfAbsent(
+    params.db,
+    'reconciliation_scan_incomplete',
+    null,
+    {
+      queue: 'reconcile',
+      cursor: params.cursorName,
+      reason: params.reason,
+      ...(params.rawCursor ? { rawCursor: params.rawCursor } : {})
+    },
+    getAnomalySeverity('reconciliation_scan_incomplete'),
+    `reconcile:${params.cursorName}:${params.reason}`
+  );
+}
+
+async function loadFileSweepCursorSafely(params: {
+  db: ReturnType<typeof createDb>;
+  cursorName: FileSweepCursorName;
+  getCursor: () => Promise<string | undefined>;
+  setCursor: (cursor: string | null) => Promise<void>;
+}): Promise<{ cursor: FileSweepCursor | undefined; anomaliesRecorded: number }> {
+  let rawCursor: string | undefined;
+
+  try {
+    rawCursor = await params.getCursor();
+  } catch (err) {
+    logger.warn('Reconcile: failed to load lifecycle sweep cursor; starting from batch head', {
+      event: 'reconciliation.anomaly_detected',
+      actor: 'worker',
+      entity: { type: 'queue', id: 'reconcile' },
+      outcome: 'failure',
+      anomalyType: 'lifecycle_scan_cursor_failed',
+      cursor: params.cursorName,
+      reason: 'cursor_read_failed',
+      error: err instanceof Error ? err.message : String(err)
+    });
+
+    return {
+      cursor: undefined,
+      anomaliesRecorded: (await recordLifecycleSweepCursorIssue({
+        db: params.db,
+        cursorName: params.cursorName,
+        reason: 'cursor_read_failed',
+        error: err
+      }))
+        ? 1
+        : 0
+    };
+  }
+
+  if (!rawCursor) {
+    return { cursor: undefined, anomaliesRecorded: 0 };
+  }
+
+  const parsedCursor = parseFileSweepCursor(rawCursor);
+  if (parsedCursor) {
+    return { cursor: parsedCursor, anomaliesRecorded: 0 };
+  }
+
+  logger.warn('Reconcile: invalid lifecycle sweep cursor; starting from batch head', {
+    event: 'reconciliation.anomaly_detected',
+    actor: 'worker',
+    entity: { type: 'queue', id: 'reconcile' },
+    outcome: 'failure',
+    anomalyType: 'lifecycle_scan_cursor_invalid',
+    cursor: params.cursorName,
+    reason: 'cursor_invalid',
+    rawCursor
+  });
+
+  let anomaliesRecorded = (await recordLifecycleSweepCursorIssue({
+    db: params.db,
+    cursorName: params.cursorName,
+    reason: 'cursor_invalid',
+    rawCursor
+  }))
+    ? 1
+    : 0;
+
+  try {
+    await params.setCursor(null);
+  } catch (err) {
+    logger.warn('Reconcile: failed to clear invalid lifecycle sweep cursor', {
+      event: 'reconciliation.anomaly_detected',
+      actor: 'worker',
+      entity: { type: 'queue', id: 'reconcile' },
+      outcome: 'failure',
+      anomalyType: 'lifecycle_scan_cursor_failed',
+      cursor: params.cursorName,
+      reason: 'cursor_write_failed',
+      error: err instanceof Error ? err.message : String(err)
+    });
+
+    if (
+      await recordLifecycleSweepCursorIssue({
+        db: params.db,
+        cursorName: params.cursorName,
+        reason: 'cursor_write_failed',
+        error: err
+      })
+    ) {
+      anomaliesRecorded += 1;
+    }
+  }
+
+  return { cursor: undefined, anomaliesRecorded };
+}
+
+async function persistFileSweepCursorSafely(params: {
+  db: ReturnType<typeof createDb>;
+  cursorName: FileSweepCursorName;
+  setCursor: (cursor: string | null) => Promise<void>;
+  cursor: FileSweepCursor | null;
+}): Promise<number> {
+  try {
+    await params.setCursor(serializeFileSweepCursor(params.cursor));
+    return 0;
+  } catch (err) {
+    logger.warn('Reconcile: failed to persist lifecycle sweep cursor', {
+      event: 'reconciliation.anomaly_detected',
+      actor: 'worker',
+      entity: { type: 'queue', id: 'reconcile' },
+      outcome: 'failure',
+      anomalyType: 'lifecycle_scan_cursor_failed',
+      cursor: params.cursorName,
+      reason: 'cursor_write_failed',
+      error: err instanceof Error ? err.message : String(err)
+    });
+
+    return (await recordLifecycleSweepCursorIssue({
+      db: params.db,
+      cursorName: params.cursorName,
+      reason: 'cursor_write_failed',
+      error: err
+    }))
+      ? 1
+      : 0;
   }
 }
 
@@ -569,19 +863,65 @@ async function shouldSkipRepairEnqueue(params: {
  * individual delayed jobs. It detects and corrects divergences between the
  * database, the job queue, and object storage.
  *
- * Six passes per run:
+ * Seven passes per run:
  * A. Fix stale expirations (active files past their expires_at).
  * B. Repair missing future expire jobs.
  * C. Handle stuck pending_upload records (promote or remove).
  * D. Detect active files whose storage object is missing (mark as missing).
  * E. Repair missing cleanup jobs for terminal file states.
  * F. Detect orphaned storage objects without metadata.
+ * G. Detect duplicate pending lifecycle jobs.
  */
 export function makeHandleReconcile(deps: ReconcileHandlerDeps) {
   return async function handleReconcile(job: Job<ReconcileJobPayload>): Promise<void> {
     const startedAtMs = Date.now();
     const olderThan = resolveOlderThan(job.data.olderThan);
     const { db, storage, cleanupQueue, expireQueue } = deps;
+    const getFutureExpirationCursor =
+      deps.getFutureExpirationCursor ??
+      (() =>
+        readPersistedFileSweepCursor({
+          db,
+          settingKey: FUTURE_EXPIRATION_CURSOR_SETTING_KEY
+        }).then((cursor) => serializeFileSweepCursor(cursor ?? null) ?? undefined));
+    const setFutureExpirationCursor =
+      deps.setFutureExpirationCursor ??
+      ((cursor: string | null) =>
+        writePersistedFileSweepCursor({
+          db,
+          settingKey: FUTURE_EXPIRATION_CURSOR_SETTING_KEY,
+          cursor: parseFileSweepCursor(cursor ?? undefined) ?? null
+        }));
+    const getMissingObjectCursor =
+      deps.getMissingObjectCursor ??
+      (() =>
+        readPersistedFileSweepCursor({
+          db,
+          settingKey: MISSING_OBJECT_CURSOR_SETTING_KEY
+        }).then((cursor) => serializeFileSweepCursor(cursor ?? null) ?? undefined));
+    const setMissingObjectCursor =
+      deps.setMissingObjectCursor ??
+      ((cursor: string | null) =>
+        writePersistedFileSweepCursor({
+          db,
+          settingKey: MISSING_OBJECT_CURSOR_SETTING_KEY,
+          cursor: parseFileSweepCursor(cursor ?? undefined) ?? null
+        }));
+    const getTerminalCleanupCursor =
+      deps.getTerminalCleanupCursor ??
+      (() =>
+        readPersistedFileSweepCursor({
+          db,
+          settingKey: TERMINAL_CLEANUP_CURSOR_SETTING_KEY
+        }).then((cursor) => serializeFileSweepCursor(cursor ?? null) ?? undefined));
+    const setTerminalCleanupCursor =
+      deps.setTerminalCleanupCursor ??
+      ((cursor: string | null) =>
+        writePersistedFileSweepCursor({
+          db,
+          settingKey: TERMINAL_CLEANUP_CURSOR_SETTING_KEY,
+          cursor: parseFileSweepCursor(cursor ?? undefined) ?? null
+        }));
     const getOrphanScanCursor = deps.getOrphanScanCursor ?? (() => loadOrphanScanCursor(db));
     const setOrphanScanCursor =
       deps.setOrphanScanCursor ?? ((cursor: string | null) => persistOrphanScanCursor(db, cursor));
@@ -627,7 +967,9 @@ export function makeHandleReconcile(deps: ReconcileHandlerDeps) {
           isNotNull(files.expiresAt),
           lt(files.expiresAt, olderThan)
         )
-      );
+      )
+      .orderBy(asc(files.expiresAt))
+      .limit(STALE_EXPIRATION_BATCH_SIZE);
 
     for (const file of staleExpired) {
       // Compare-and-set: only update if still active/expiring.
@@ -685,20 +1027,32 @@ export function makeHandleReconcile(deps: ReconcileHandlerDeps) {
     // ── Pass B: Repair missing future expiration jobs ───────────────────────
     // The upload flow schedules delayed expire jobs, but enqueue failures or
     // queue data loss must not leave future-expiring files without a job.
+    const futureExpirationCursorState = await loadFileSweepCursorSafely({
+      db,
+      cursorName: 'future_expiration',
+      getCursor: getFutureExpirationCursor,
+      setCursor: setFutureExpirationCursor
+    });
+    counters.anomaliesRecorded += futureExpirationCursorState.anomaliesRecorded;
+    const futureExpirationCursor = futureExpirationCursorState.cursor;
     const futureExpiring = await db
       .select({
         id: files.id,
-        expiresAt: files.expiresAt
+        expiresAt: files.expiresAt,
+        cursorTimestamp: files.expiresAt
       })
       .from(files)
       .where(
-        and(
-          inArray(files.status, ['active', 'expiring']),
-          isNotNull(files.expiresAt),
-          gt(files.expiresAt, olderThan)
+        withOptionalCursorCondition(
+          and(
+            inArray(files.status, ['active', 'expiring']),
+            isNotNull(files.expiresAt),
+            gt(files.expiresAt, olderThan)
+          ) ?? gt(files.expiresAt, olderThan),
+          buildFileSweepCursorCondition(files.expiresAt, futureExpirationCursor)
         )
       )
-      .orderBy(asc(files.expiresAt))
+      .orderBy(asc(files.expiresAt), asc(files.id))
       .limit(FUTURE_EXPIRATION_BATCH_SIZE);
 
     for (const file of futureExpiring) {
@@ -760,6 +1114,13 @@ export function makeHandleReconcile(deps: ReconcileHandlerDeps) {
       });
     }
 
+    counters.anomaliesRecorded += await persistFileSweepCursorSafely({
+      db,
+      cursorName: 'future_expiration',
+      setCursor: setFutureExpirationCursor,
+      cursor: getNextFileSweepCursor(futureExpiring, FUTURE_EXPIRATION_BATCH_SIZE)
+    });
+
     // ── Pass C: Handle stuck pending_upload records ─────────────────────────
     // Files stuck in pending_upload longer than the stale threshold have either
     // had their upload partially succeed (object exists → promote) or fail
@@ -774,6 +1135,7 @@ export function makeHandleReconcile(deps: ReconcileHandlerDeps) {
       })
       .from(files)
       .where(and(eq(files.status, 'pending_upload'), lt(files.uploadedAt, staleCutoff)))
+      .orderBy(asc(files.uploadedAt), asc(files.id))
       .limit(STUCK_PENDING_BATCH_SIZE);
 
     for (const file of stuckPending) {
@@ -783,13 +1145,17 @@ export function makeHandleReconcile(deps: ReconcileHandlerDeps) {
       } catch (err) {
         // Storage unavailable for this check — skip; next reconcile will retry.
         counters.storageCheckFailures += 1;
-        logStorageCheckFailure({
+        const inserted = await logStorageCheckFailure({
+          db,
           phase: 'stuck_pending',
           entity: { type: 'file', id: file.id },
           operation: 'exists',
           objectKey: file.objectKey,
           err
         });
+        if (inserted) {
+          counters.anomaliesRecorded += 1;
+        }
         continue;
       }
 
@@ -923,17 +1289,30 @@ export function makeHandleReconcile(deps: ReconcileHandlerDeps) {
     }
 
     // ── Pass D: Detect active files with missing storage objects ────────────
-    // Sample the oldest active/expiring files and confirm their objects exist.
-    // We process a bounded batch per run to keep reconciliation fast; later
-    // runs will advance to newer files automatically.
+    // Sample a bounded batch of active/expiring files and persist a cursor so
+    // later runs continue from where the previous sweep stopped.
+    const missingObjectCursorState = await loadFileSweepCursorSafely({
+      db,
+      cursorName: 'missing_object',
+      getCursor: getMissingObjectCursor,
+      setCursor: setMissingObjectCursor
+    });
+    counters.anomaliesRecorded += missingObjectCursorState.anomaliesRecorded;
+    const missingObjectCursor = missingObjectCursorState.cursor;
     const activeBatch = await db
       .select({
         id: files.id,
-        objectKey: files.objectKey
+        objectKey: files.objectKey,
+        cursorTimestamp: files.uploadedAt
       })
       .from(files)
-      .where(inArray(files.status, ['active', 'expiring']))
-      .orderBy(asc(files.uploadedAt))
+      .where(
+        withOptionalCursorCondition(
+          inArray(files.status, ['active', 'expiring']),
+          buildFileSweepCursorCondition(files.uploadedAt, missingObjectCursor)
+        )
+      )
+      .orderBy(asc(files.uploadedAt), asc(files.id))
       .limit(MISSING_OBJECT_BATCH_SIZE);
 
     for (const file of activeBatch) {
@@ -942,13 +1321,17 @@ export function makeHandleReconcile(deps: ReconcileHandlerDeps) {
         objectExists = await storage.exists(file.objectKey);
       } catch (err) {
         counters.storageCheckFailures += 1;
-        logStorageCheckFailure({
+        const inserted = await logStorageCheckFailure({
+          db,
           phase: 'missing_object',
           entity: { type: 'file', id: file.id },
           operation: 'exists',
           objectKey: file.objectKey,
           err
         });
+        if (inserted) {
+          counters.anomaliesRecorded += 1;
+        }
         continue;
       }
 
@@ -989,19 +1372,40 @@ export function makeHandleReconcile(deps: ReconcileHandlerDeps) {
       }
     }
 
+    counters.anomaliesRecorded += await persistFileSweepCursorSafely({
+      db,
+      cursorName: 'missing_object',
+      setCursor: setMissingObjectCursor,
+      cursor: getNextFileSweepCursor(activeBatch, MISSING_OBJECT_BATCH_SIZE)
+    });
+
     // ── Pass E: Repair missing cleanup jobs for terminal files ──────────────
     // Expired, consumed, and deleted files should not retain their object.
     // If the object still exists and no cleanup job is queued, enqueue one.
+    const terminalCleanupCursorState = await loadFileSweepCursorSafely({
+      db,
+      cursorName: 'terminal_cleanup',
+      getCursor: getTerminalCleanupCursor,
+      setCursor: setTerminalCleanupCursor
+    });
+    counters.anomaliesRecorded += terminalCleanupCursorState.anomaliesRecorded;
+    const terminalCleanupCursor = terminalCleanupCursorState.cursor;
     const terminalFiles = await db
       .select({
         id: files.id,
         objectKey: files.objectKey,
         status: files.status,
-        consumedAt: files.consumedAt
+        consumedAt: files.consumedAt,
+        cursorTimestamp: files.uploadedAt
       })
       .from(files)
-      .where(inArray(files.status, ['expired', 'consumed', 'deleted']))
-      .orderBy(asc(files.uploadedAt))
+      .where(
+        withOptionalCursorCondition(
+          inArray(files.status, ['expired', 'consumed', 'deleted']),
+          buildFileSweepCursorCondition(files.uploadedAt, terminalCleanupCursor)
+        )
+      )
+      .orderBy(asc(files.uploadedAt), asc(files.id))
       .limit(TERMINAL_CLEANUP_BATCH_SIZE);
 
     for (const file of terminalFiles) {
@@ -1014,13 +1418,17 @@ export function makeHandleReconcile(deps: ReconcileHandlerDeps) {
         objectExists = await storage.exists(file.objectKey);
       } catch (err) {
         counters.storageCheckFailures += 1;
-        logStorageCheckFailure({
+        const inserted = await logStorageCheckFailure({
+          db,
           phase: 'terminal_cleanup',
           entity: { type: 'file', id: file.id },
           operation: 'exists',
           objectKey: file.objectKey,
           err
         });
+        if (inserted) {
+          counters.anomaliesRecorded += 1;
+        }
         continue;
       }
 
@@ -1078,6 +1486,13 @@ export function makeHandleReconcile(deps: ReconcileHandlerDeps) {
         objectKey: file.objectKey
       });
     }
+
+    counters.anomaliesRecorded += await persistFileSweepCursorSafely({
+      db,
+      cursorName: 'terminal_cleanup',
+      setCursor: setTerminalCleanupCursor,
+      cursor: getNextFileSweepCursor(terminalFiles, TERMINAL_CLEANUP_BATCH_SIZE)
+    });
 
     // ── Pass F: Detect orphaned storage objects without metadata ────────────
     // Orphaned objects are ambiguous and must be surfaced as anomalies rather
@@ -1184,12 +1599,16 @@ export function makeHandleReconcile(deps: ReconcileHandlerDeps) {
     } catch (err) {
       // Storage list failed — leave orphan detection for the next run.
       counters.orphanScanFailures += 1;
-      logStorageCheckFailure({
+      const inserted = await logStorageCheckFailure({
+        db,
         phase: 'orphaned_object_scan',
         entity: { type: 'queue', id: 'reconcile' },
         operation: 'list',
         err
       });
+      if (inserted) {
+        counters.anomaliesRecorded += 1;
+      }
     }
 
     if (shouldPersistOrphanScanCursor) {

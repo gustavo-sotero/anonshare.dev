@@ -1,13 +1,32 @@
 import { API_ERROR_CODES, uploadRequestSchema } from '@anonshare/contracts';
 import { MAX_FILE_SIZE_BYTES } from '@anonshare/domain';
-import { app as appConfig } from '@anonshare/infrastructure/config';
+import { app as appConfig, loadSystemSettingOrDefault } from '@anonshare/infrastructure/config';
 import { createDb } from '@anonshare/infrastructure/db';
 import { files } from '@anonshare/infrastructure/db/schema';
 import { logger } from '@anonshare/infrastructure/logger';
+import { checkRateLimit, recordRateLimitBlocked } from '@anonshare/infrastructure/rate-limit';
+import type { Redis } from '@anonshare/infrastructure/redis';
+import { getRedisClient } from '@anonshare/infrastructure/redis';
 import { StorageError, storageAdapter } from '@anonshare/infrastructure/storage';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
-import { enqueueExpireFileJob } from '../queues';
+import { enqueueCleanupFileJob, enqueueExpireFileJob } from '../queues';
+
+// ─── Rate limiting ────────────────────────────────────────────────────────────
+/**
+ * Hash a raw IP to a short hex string for rate-limit key construction.
+ * Avoids persisting raw IPs in Redis keys.
+ */
+async function hashIpForRateLimit(raw?: string): Promise<string | null> {
+  if (!raw) return null;
+  const firstIp = raw.split(',')[0];
+  if (!firstIp) return null;
+  const data = new TextEncoder().encode(firstIp.trim());
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return Buffer.from(digest).toString('hex').slice(0, 32);
+}
+
+const UPLOAD_RATE_WINDOW_SECONDS = 3600;
 
 // ─── Lazy DB singleton ────────────────────────────────────────────────────────
 // Defer initialisation to first use so that importing this module in tests
@@ -125,6 +144,15 @@ export type UploadRouterDeps = {
    * Non-fatal: if omitted or if it throws, the reconciler will catch missed expirations.
    */
   enqueueExpireFile?: (fileId: string, delayMs: number) => Promise<void>;
+  /**
+   * Override the default cleanup enqueue function. Useful in tests.
+   * Used when the file has already expired by the time activation finishes.
+   */
+  enqueueCleanupFile?: (fileId: string, objectKey: string, delayMs?: number) => Promise<void>;
+  /** Override the Redis client. Useful in tests. */
+  getRedis?: () => Redis;
+  /** Override the runtime upload rate-limit loader. Useful in tests. */
+  loadUploadRateLimit?: () => Promise<number>;
 };
 
 /**
@@ -138,6 +166,11 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
   const resolveDb = deps.getDb ?? getDb;
   const resolveStorage: UploadStorage = deps.storage ?? storageAdapter;
   const resolveEnqueueExpireFile = deps.enqueueExpireFile ?? enqueueExpireFileJob;
+  const resolveEnqueueCleanupFile = deps.enqueueCleanupFile ?? enqueueCleanupFileJob;
+  const resolveGetRedis = deps.getRedis ?? getRedisClient;
+  const resolveLoadUploadRateLimit =
+    deps.loadUploadRateLimit ??
+    (() => loadSystemSettingOrDefault(resolveDb(), 'uploadRateLimitPerHour'));
 
   const router = new Hono();
 
@@ -155,13 +188,60 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
    *   2. Insert a `pending_upload` record so the reconciler can detect partial failures.
    *   3. Write the file object to storage.
    *   4. Confirm the object is readable through storage metadata.
-   *   5. Promote the record to `active`.
+   *   5. Promote the record to `active`, or directly to `expired` if the
+   *      configured deadline elapsed while the upload was being finalized.
    *   On any storage failure, delete the pending record (compensation).
    *   On activation failure the record stays as `pending_upload`;
    *   the reconciler will promote it when it detects the live storage object.
    */
   router.post('/', async (c) => {
     const requestId = c.req.header('x-request-id') ?? crypto.randomUUID();
+
+    // ── Rate limiting ─────────────────────────────────────────────────────────
+    const rawIp = c.req.header('x-forwarded-for') ?? c.req.header('x-real-ip');
+    const ipHash = await hashIpForRateLimit(rawIp);
+    if (ipHash) {
+      let limit: Awaited<ReturnType<typeof checkRateLimit>> | null = null;
+
+      try {
+        const uploadRateLimitPerHour = await resolveLoadUploadRateLimit();
+        limit = await checkRateLimit(
+          resolveGetRedis(),
+          `rl:upload:${ipHash}`,
+          uploadRateLimitPerHour,
+          UPLOAD_RATE_WINDOW_SECONDS
+        );
+      } catch (err) {
+        logger.warn('Rate limit degraded: upload', {
+          event: 'rate_limit.degraded',
+          requestId,
+          actor: 'anonymous',
+          entity: { type: 'http_request', id: 'POST /upload' },
+          outcome: 'failure',
+          surface: 'upload',
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+
+      if (limit?.limited) {
+        logger.warn('Rate limit blocked: upload', {
+          event: 'rate_limit.blocked',
+          requestId,
+          actor: 'anonymous',
+          entity: { type: 'http_request', id: 'POST /upload' },
+          outcome: 'failure',
+          surface: 'upload',
+          limit: limit.limit,
+          count: limit.count,
+          resetInSeconds: limit.resetInSeconds
+        });
+        recordRateLimitBlocked(resolveGetRedis(), 'upload').catch(() => {});
+        return c.json(
+          errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many uploads. Please try again later.'),
+          429
+        );
+      }
+    }
 
     // ── Pre-flight size guard ─────────────────────────────────────────────────
     // Reject obviously oversized requests before buffering the full body.
@@ -415,11 +495,16 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
 
     // ── Promote to active ─────────────────────────────────────────────────────
     // Only after both DB record and storage object are confirmed consistent.
+    const activatedAt = new Date();
+    const expiredDuringActivation = Boolean(expiresAt && expiresAt <= activatedAt);
     let activatedRecord: Array<{ id: string }>;
     try {
       activatedRecord = await resolveDb()
         .update(files)
-        .set({ status: 'active', activatedAt: new Date() })
+        .set({
+          status: expiredDuringActivation ? 'expired' : 'active',
+          activatedAt
+        })
         .where(eq(files.id, fileId))
         .returning({ id: files.id });
     } catch (err) {
@@ -499,27 +584,47 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
       entity: { type: 'file', id: token },
       outcome: 'success',
       fileId,
-      objectKey
+      objectKey,
+      status: expiredDuringActivation ? 'expired' : 'active'
     });
 
-    // ── Schedule expiration job if applicable ─────────────────────────────────
+    // ── Schedule lifecycle follow-up if applicable ────────────────────────────
     // Non-fatal: if enqueueing fails, the hourly reconciler will catch the
-    // missed expiration. The reconciler is the second layer of correctness.
+    // missed expiration or cleanup. The reconciler is the second layer of
+    // correctness.
     if (expiresAt) {
-      const delayMs = expiresAt.getTime() - Date.now();
-      if (delayMs > 0) {
+      if (expiredDuringActivation) {
         try {
-          await resolveEnqueueExpireFile(fileId, delayMs);
+          await resolveEnqueueCleanupFile(fileId, objectKey);
         } catch (err) {
-          logger.warn('Upload: failed to enqueue expire-file job — reconciler will handle', {
+          logger.warn('Upload: failed to enqueue cleanup for already-expired activation', {
             event: 'upload_activated',
             requestId,
             actor: 'anonymous',
             entity: { type: 'file', id: token },
             outcome: 'success',
             fileId,
+            reason: 'activation_expired_cleanup_enqueue_failed',
             error: err instanceof Error ? err.message : String(err)
           });
+        }
+      } else {
+        const delayMs = expiresAt.getTime() - activatedAt.getTime();
+
+        if (delayMs > 0) {
+          try {
+            await resolveEnqueueExpireFile(fileId, delayMs);
+          } catch (err) {
+            logger.warn('Upload: failed to enqueue expire-file job — reconciler will handle', {
+              event: 'upload_activated',
+              requestId,
+              actor: 'anonymous',
+              entity: { type: 'file', id: token },
+              outcome: 'success',
+              fileId,
+              error: err instanceof Error ? err.message : String(err)
+            });
+          }
         }
       }
     }

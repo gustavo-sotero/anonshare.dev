@@ -93,9 +93,11 @@ describe('FILE_STATUS_TRANSITIONS', () => {
     expect(FILE_STATUS_TRANSITIONS.consumed).toEqual([]);
   });
 
-  test('hidden can be restored to active or deleted by admin', () => {
+  test('hidden can be restored to active, expiring, expired, or deleted by admin', () => {
     const allowed = FILE_STATUS_TRANSITIONS.hidden;
     expect(allowed).toContain('active');
+    expect(allowed).toContain('expiring');
+    expect(allowed).toContain('expired');
     expect(allowed).toContain('deleted');
   });
 
@@ -116,6 +118,8 @@ describe('isTransitionAllowed', () => {
     expect(isTransitionAllowed('expiring', 'consumed')).toBe(true);
     expect(isTransitionAllowed('expiring', 'missing')).toBe(true);
     expect(isTransitionAllowed('hidden', 'active')).toBe(true);
+    expect(isTransitionAllowed('hidden', 'expiring')).toBe(true);
+    expect(isTransitionAllowed('hidden', 'expired')).toBe(true);
     expect(isTransitionAllowed('expired', 'deleted')).toBe(true);
     expect(isTransitionAllowed('missing', 'active')).toBe(true);
   });

@@ -6,6 +6,7 @@
     ".": "./src/index.ts",
     "./db": "./src/db/index.ts",
     "./db/schema": "./src/db/schema/index.ts",
+    "./rate-limit": "./src/rate-limit/index.ts",
     "./redis": "./src/redis/index.ts",
     "./storage": "./src/storage/index.ts",
     "./health": "./src/health/index.ts",

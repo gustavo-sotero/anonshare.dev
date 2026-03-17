@@ -1,5 +1,6 @@
 import {
   API_ERROR_CODES,
+  DOWNLOAD_URL_EXPIRY_SECONDS,
   ONE_TIME_DOWNLOAD_CLEANUP_DELAY_MS,
   shareTokenParamsSchema
 } from '@anonshare/contracts';
@@ -8,9 +9,13 @@ import {
   isPreviewSupported,
   isPubliclyAccessible
 } from '@anonshare/domain';
+import { loadSystemSettingOrDefault } from '@anonshare/infrastructure/config';
 import { createDb } from '@anonshare/infrastructure/db';
 import { downloadEvents, files } from '@anonshare/infrastructure/db/schema';
 import { logger } from '@anonshare/infrastructure/logger';
+import { checkRateLimit, recordRateLimitBlocked } from '@anonshare/infrastructure/rate-limit';
+import type { Redis } from '@anonshare/infrastructure/redis';
+import { getRedisClient } from '@anonshare/infrastructure/redis';
 import type { StorageSignedUrlOptions } from '@anonshare/infrastructure/storage';
 import { StorageError, storageAdapter } from '@anonshare/infrastructure/storage';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -18,8 +23,13 @@ import { Hono } from 'hono';
 import { enqueueCleanupFileJob } from '../queues';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const DOWNLOAD_URL_EXPIRY_SECONDS = 900; // 15 minutes
 const PREVIEW_URL_EXPIRY_SECONDS = 3600; // 1 hour
+
+const SHARE_DOWNLOAD_RATE_WINDOW_SECONDS = 60;
+
+// Additional per-token guard to contain abuse focused on a single public link.
+const SHARE_TOKEN_RATE_LIMIT = 12;
+const SHARE_TOKEN_RATE_WINDOW_SECONDS = 60;
 
 // ─── Lazy DB singleton ────────────────────────────────────────────────────────
 let _db: ReturnType<typeof createDb> | null = null;
@@ -102,14 +112,20 @@ export type ShareRouterDeps = {
   getDb?: () => ReturnType<typeof createDb>;
   storage?: ShareStorage;
   enqueueCleanupFile?: (fileId: string, objectKey: string, delayMs?: number) => Promise<void>;
+  getRedis?: () => Redis;
+  loadDownloadRateLimit?: () => Promise<number>;
 };
 
-// ─── Router factory ───────────────────────────────────────────────────────────
+// ─── Router factory ──────────────────────────────────────────────────────────────────────
 
 export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
   const resolveDb = deps.getDb ?? getDb;
   const resolveStorage: ShareStorage = deps.storage ?? storageAdapter;
   const resolveEnqueueCleanupFile = deps.enqueueCleanupFile ?? enqueueCleanupFileJob;
+  const resolveGetRedis = deps.getRedis ?? getRedisClient;
+  const resolveLoadDownloadRateLimit =
+    deps.loadDownloadRateLimit ??
+    (() => loadSystemSettingOrDefault(resolveDb(), 'downloadRateLimitPerMinute'));
 
   const router = new Hono();
 
@@ -121,11 +137,80 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
   router.get('/:token', async (c) => {
     const requestId = c.req.header('x-request-id') ?? crypto.randomUUID();
     const rawToken = c.req.param('token');
-    c.header('cache-control', 'no-store');
-
     const token = parseShareToken(rawToken);
     if (!token) {
       return c.json(errorBody(API_ERROR_CODES.NOT_FOUND, 'File not found'), 404);
+    }
+
+    const rawIp = c.req.header('x-forwarded-for') ?? c.req.header('x-real-ip');
+    c.header('cache-control', 'no-store');
+
+    // ── Rate limiting ────────────────────────────────────────────────────────
+    const ipHash = await hashIp(rawIp);
+    if (ipHash) {
+      try {
+        const shareDownloadRateLimit = await resolveLoadDownloadRateLimit();
+        const limit = await checkRateLimit(
+          resolveGetRedis(),
+          `rl:share:${ipHash}`,
+          shareDownloadRateLimit,
+          SHARE_DOWNLOAD_RATE_WINDOW_SECONDS
+        );
+        if (limit.limited) {
+          logger.warn('Rate limit blocked: share metadata', {
+            event: 'rate_limit.blocked',
+            requestId,
+            actor: 'anonymous',
+            entity: { type: 'http_request', id: `GET /share/${rawToken}` },
+            outcome: 'failure',
+            surface: 'share_metadata',
+            limit: limit.limit,
+            count: limit.count,
+            resetInSeconds: limit.resetInSeconds
+          });
+          recordRateLimitBlocked(resolveGetRedis(), 'share_metadata').catch(() => {});
+          return c.json(
+            errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
+            429
+          );
+        }
+
+        const tokenLimit = await checkRateLimit(
+          resolveGetRedis(),
+          `rl:share_token:${token}:${ipHash}`,
+          SHARE_TOKEN_RATE_LIMIT,
+          SHARE_TOKEN_RATE_WINDOW_SECONDS
+        );
+
+        if (tokenLimit.limited) {
+          logger.warn('Rate limit blocked: share metadata (per-token)', {
+            event: 'rate_limit.blocked',
+            requestId,
+            actor: 'anonymous',
+            entity: { type: 'http_request', id: `GET /share/${rawToken}` },
+            outcome: 'failure',
+            surface: 'share_metadata_token',
+            limit: tokenLimit.limit,
+            count: tokenLimit.count,
+            resetInSeconds: tokenLimit.resetInSeconds
+          });
+          recordRateLimitBlocked(resolveGetRedis(), 'share_metadata_token').catch(() => {});
+          return c.json(
+            errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
+            429
+          );
+        }
+      } catch (err) {
+        logger.warn('Rate limit degraded: share metadata', {
+          event: 'rate_limit.degraded',
+          requestId,
+          actor: 'anonymous',
+          entity: { type: 'http_request', id: `GET /share/${rawToken}` },
+          outcome: 'failure',
+          surface: 'share_metadata',
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
     }
 
     let file: typeof files.$inferSelect | undefined;
@@ -173,10 +258,9 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
       );
     }
 
-    // Allow brief private caching of metadata for active/expiring files.
-    // Private prevents CDN caching of access-controlled content; max-age=60
-    // is short enough to reflect state transitions within a minute.
-    c.header('cache-control', 'private, max-age=60');
+    // Keep metadata cacheable only with mandatory revalidation so the browser
+    // does not serve stale availability after moderation transitions.
+    c.header('cache-control', 'private, no-cache, max-age=0, must-revalidate');
     return c.json(
       {
         ok: true as const,
@@ -207,13 +291,79 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
   router.get('/:token/download', async (c) => {
     const requestId = c.req.header('x-request-id') ?? crypto.randomUUID();
     const rawToken = c.req.param('token');
+    const token = parseShareToken(rawToken);
+    if (!token) {
+      return c.json(errorBody(API_ERROR_CODES.NOT_FOUND, 'File not found'), 404);
+    }
+
     const rawIp = c.req.header('x-forwarded-for') ?? c.req.header('x-real-ip');
     const ipHash = await hashIp(rawIp);
     c.header('cache-control', 'no-store');
 
-    const token = parseShareToken(rawToken);
-    if (!token) {
-      return c.json(errorBody(API_ERROR_CODES.NOT_FOUND, 'File not found'), 404);
+    // ── Rate limiting ────────────────────────────────────────────────────────
+    if (ipHash) {
+      try {
+        const shareDownloadRateLimit = await resolveLoadDownloadRateLimit();
+        const limit = await checkRateLimit(
+          resolveGetRedis(),
+          `rl:download:${ipHash}`,
+          shareDownloadRateLimit,
+          SHARE_DOWNLOAD_RATE_WINDOW_SECONDS
+        );
+        if (limit.limited) {
+          logger.warn('Rate limit blocked: download', {
+            event: 'rate_limit.blocked',
+            requestId,
+            actor: 'anonymous',
+            entity: { type: 'http_request', id: `GET /share/${rawToken}/download` },
+            outcome: 'failure',
+            surface: 'download',
+            limit: limit.limit,
+            count: limit.count,
+            resetInSeconds: limit.resetInSeconds
+          });
+          recordRateLimitBlocked(resolveGetRedis(), 'download').catch(() => {});
+          return c.json(
+            errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
+            429
+          );
+        }
+
+        const tokenLimit = await checkRateLimit(
+          resolveGetRedis(),
+          `rl:share_token:${token}:${ipHash}`,
+          SHARE_TOKEN_RATE_LIMIT,
+          SHARE_TOKEN_RATE_WINDOW_SECONDS
+        );
+        if (tokenLimit.limited) {
+          logger.warn('Rate limit blocked: download (per-token)', {
+            event: 'rate_limit.blocked',
+            requestId,
+            actor: 'anonymous',
+            entity: { type: 'http_request', id: `GET /share/${rawToken}/download` },
+            outcome: 'failure',
+            surface: 'download_token',
+            limit: tokenLimit.limit,
+            count: tokenLimit.count,
+            resetInSeconds: tokenLimit.resetInSeconds
+          });
+          recordRateLimitBlocked(resolveGetRedis(), 'download_token').catch(() => {});
+          return c.json(
+            errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
+            429
+          );
+        }
+      } catch (err) {
+        logger.warn('Rate limit degraded: download', {
+          event: 'rate_limit.degraded',
+          requestId,
+          actor: 'anonymous',
+          entity: { type: 'http_request', id: `GET /share/${rawToken}/download` },
+          outcome: 'failure',
+          surface: 'download',
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
     }
 
     let file: typeof files.$inferSelect | undefined;
@@ -490,11 +640,81 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
   router.get('/:token/preview', async (c) => {
     const requestId = c.req.header('x-request-id') ?? crypto.randomUUID();
     const rawToken = c.req.param('token');
-    c.header('cache-control', 'no-store');
-
     const token = parseShareToken(rawToken);
     if (!token) {
       return c.json(errorBody(API_ERROR_CODES.NOT_FOUND, 'File not found'), 404);
+    }
+
+    c.header('cache-control', 'no-store');
+
+    // ── Rate limiting ────────────────────────────────────────────────────────
+    const rawIpPreview = c.req.header('x-forwarded-for') ?? c.req.header('x-real-ip');
+    if (rawIpPreview) {
+      const previewIpHash = await hashIp(rawIpPreview);
+      if (previewIpHash) {
+        try {
+          const shareDownloadRateLimit = await resolveLoadDownloadRateLimit();
+          const limit = await checkRateLimit(
+            resolveGetRedis(),
+            `rl:preview:${previewIpHash}`,
+            shareDownloadRateLimit,
+            SHARE_DOWNLOAD_RATE_WINDOW_SECONDS
+          );
+          if (limit.limited) {
+            logger.warn('Rate limit blocked: preview', {
+              event: 'rate_limit.blocked',
+              requestId,
+              actor: 'anonymous',
+              entity: { type: 'http_request', id: `GET /share/${rawToken}/preview` },
+              outcome: 'failure',
+              surface: 'preview',
+              limit: limit.limit,
+              count: limit.count,
+              resetInSeconds: limit.resetInSeconds
+            });
+            recordRateLimitBlocked(resolveGetRedis(), 'preview').catch(() => {});
+            return c.json(
+              errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
+              429
+            );
+          }
+
+          const tokenLimit = await checkRateLimit(
+            resolveGetRedis(),
+            `rl:share_token:${token}:${previewIpHash}`,
+            SHARE_TOKEN_RATE_LIMIT,
+            SHARE_TOKEN_RATE_WINDOW_SECONDS
+          );
+          if (tokenLimit.limited) {
+            logger.warn('Rate limit blocked: preview (per-token)', {
+              event: 'rate_limit.blocked',
+              requestId,
+              actor: 'anonymous',
+              entity: { type: 'http_request', id: `GET /share/${rawToken}/preview` },
+              outcome: 'failure',
+              surface: 'preview_token',
+              limit: tokenLimit.limit,
+              count: tokenLimit.count,
+              resetInSeconds: tokenLimit.resetInSeconds
+            });
+            recordRateLimitBlocked(resolveGetRedis(), 'preview_token').catch(() => {});
+            return c.json(
+              errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
+              429
+            );
+          }
+        } catch (err) {
+          logger.warn('Rate limit degraded: preview', {
+            event: 'rate_limit.degraded',
+            requestId,
+            actor: 'anonymous',
+            entity: { type: 'http_request', id: `GET /share/${rawToken}/preview` },
+            outcome: 'failure',
+            surface: 'preview',
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
+      }
     }
 
     let file: typeof files.$inferSelect | undefined;

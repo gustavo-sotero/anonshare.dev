@@ -988,7 +988,8 @@ code {
 
 .admin-toolbar,
 .queue-card__header,
-.anomaly-card__header {
+.anomaly-card__header,
+.report-card__header {
   display: flex;
   justify-content: space-between;
   gap: 16px;
@@ -1062,7 +1063,9 @@ code {
 .anomaly-list,
 .anomaly-card,
 .anomaly-card__meta,
-.detail-pairs {
+.detail-pairs,
+.report-queue,
+.report-card {
   display: grid;
   gap: 14px;
 }
@@ -1094,6 +1097,69 @@ code {
 
 .anomaly-list {
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.report-queue {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.report-card {
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(163, 193, 173, 0.16);
+  background: rgba(9, 19, 30, 0.7);
+}
+
+.report-card--selected {
+  border-color: rgba(200, 255, 135, 0.34);
+  box-shadow: 0 0 0 1px rgba(200, 255, 135, 0.12);
+}
+
+.report-card--compact {
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.report-card__message {
+  min-height: 46px;
+}
+
+.report-card__meta {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.report-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.report-card__chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.report-card__actions .button-link {
+  flex: 0 0 auto;
+}
+
+.admin-detail-stack,
+.admin-detail-grid,
+.admin-detail-list,
+.admin-detail-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.admin-detail-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.admin-detail-grid--columns {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
 }
 
 .anomaly-card__meta {
@@ -1150,13 +1216,18 @@ code {
 @media (max-width: 980px) {
   .metric-grid,
   .anomaly-list,
+  .report-queue,
+  .admin-detail-grid,
+  .admin-detail-grid--columns,
   .anomaly-card__meta {
     grid-template-columns: 1fr;
   }
 
   .admin-toolbar,
   .queue-card__header,
-  .anomaly-card__header {
+  .anomaly-card__header,
+  .report-card__header,
+  .report-card__chips {
     flex-direction: column;
   }
 

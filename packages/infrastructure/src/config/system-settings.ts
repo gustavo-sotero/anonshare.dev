@@ -1,4 +1,7 @@
 import { REPORT_AUTO_HIDE_THRESHOLD_DEFAULT } from '@anonshare/domain';
+import { eq } from 'drizzle-orm';
+import type { Db } from '../db/client';
+import { systemSettings } from '../db/schema';
 
 type NumericSystemSettingDefinition = {
   key: string;
@@ -78,6 +81,20 @@ export function resolveSystemSetting(name: SystemSettingName, rawValue?: string 
   }
 
   return parseSystemSettingValue(name, rawValue);
+}
+
+export async function loadSystemSettingOrDefault(db: Db, name: SystemSettingName): Promise<number> {
+  const definition = SYSTEM_SETTING_DEFINITIONS[name];
+
+  try {
+    const row = await db.query.systemSettings.findFirst({
+      where: eq(systemSettings.key, definition.key)
+    });
+
+    return resolveSystemSetting(name, row?.value);
+  } catch {
+    return getSystemSettingDefault(name);
+  }
 }
 
 export const SYSTEM_SETTING_DEFAULTS: readonly SystemSettingSeed[] = Object.freeze(

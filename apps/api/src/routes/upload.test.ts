@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { API_ERROR_CODES, uploadRequestSchema } from '@anonshare/contracts';
 import { MAX_EXPIRATION_DAYS, MAX_FILE_SIZE_BYTES } from '@anonshare/domain';
+import type { Redis } from '@anonshare/infrastructure/redis';
 import { StorageError } from '@anonshare/infrastructure/storage';
 import { Hono } from 'hono';
 import { createUploadRouter, type UploadRouterDeps } from './upload';
@@ -13,6 +14,7 @@ type DbStubs = {
   updateReturn?: { id: string }[];
   updateShouldThrow?: boolean;
   deleteShouldThrow?: boolean;
+  captureUpdateSet?: (values: unknown) => void;
 };
 
 type StorageStubs = {
@@ -28,6 +30,8 @@ type StorageStubs = {
 type QueueStubs = {
   captureExpireEnqueue?: (fileId: string, delayMs: number) => void;
   enqueueExpireShouldThrow?: boolean;
+  captureCleanupEnqueue?: (fileId: string, objectKey: string, delayMs: number | undefined) => void;
+  enqueueCleanupShouldThrow?: boolean;
 };
 
 /**
@@ -58,9 +62,11 @@ function makeMockDeps(
           })
         }),
         update: (_tbl: unknown) => ({
-          set: (_vals: unknown) => ({
+          set: (values: unknown) => ({
             where: (_cond: unknown) => ({
               returning: async (_cols: unknown) => {
+                db.captureUpdateSet?.(values);
+
                 if (db.updateShouldThrow) throw new Error('DB update failed');
                 return updateReturn;
               }
@@ -117,6 +123,14 @@ function makeMockDeps(
       if (queue.enqueueExpireShouldThrow) {
         throw new Error('Expire queue unavailable');
       }
+    },
+
+    enqueueCleanupFile: async (fileId: string, objectKey: string, delayMs?: number) => {
+      queue.captureCleanupEnqueue?.(fileId, objectKey, delayMs);
+
+      if (queue.enqueueCleanupShouldThrow) {
+        throw new Error('Cleanup queue unavailable');
+      }
     }
   };
 }
@@ -133,6 +147,29 @@ function makeFutureDate(daysFromNow: number): string {
 
 function yesterdayIso(): string {
   return new Date(Date.now() - 86_400_000).toISOString();
+}
+
+/**
+ * Minimal Redis double for rate-limit path testing.
+ * `count` is the value returned by INCR — anything > the limit triggers a 429.
+ */
+function makeRedis(opts: { count?: number } = {}): Redis {
+  const count = opts.count ?? 1;
+  return {
+    incr: async (_key: string) => count,
+    expire: async () => 1,
+    ttl: async () => 3599
+  } as unknown as Redis;
+}
+
+function makeFailingRedis(): Redis {
+  return {
+    incr: async () => {
+      throw new Error('redis unavailable');
+    },
+    expire: async () => 1,
+    ttl: async () => 3599
+  } as unknown as Redis;
 }
 
 /** Mount the upload router under /upload and return the composite app. */
@@ -335,6 +372,84 @@ describe('POST /upload — successful upload lifecycle', () => {
   test('still returns 201 when expire-file enqueue fails after activation', async () => {
     const app = buildApp(makeMockDeps({}, {}, { enqueueExpireShouldThrow: true }));
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+
+    const response = await postUpload(app, { file: makeFile(), expiresAt });
+
+    expect(response.status).toBe(201);
+  });
+
+  test('promotes directly to expired and enqueues cleanup when expiration elapses during activation', async () => {
+    const capturedUpdates: unknown[] = [];
+    const capturedExpireEnqueues: Array<{ fileId: string; delayMs: number }> = [];
+    const capturedCleanupEnqueues: Array<{
+      fileId: string;
+      objectKey: string;
+      delayMs: number | undefined;
+    }> = [];
+    const app = buildApp(
+      makeMockDeps(
+        {
+          captureUpdateSet: (values) => {
+            capturedUpdates.push(values);
+          }
+        },
+        {
+          headImpl: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+
+            return {
+              contentLength: 1024,
+              contentType: 'text/plain'
+            };
+          }
+        },
+        {
+          captureExpireEnqueue: (fileId, delayMs) => {
+            capturedExpireEnqueues.push({ fileId, delayMs });
+          },
+          captureCleanupEnqueue: (fileId, objectKey, delayMs) => {
+            capturedCleanupEnqueues.push({ fileId, objectKey, delayMs });
+          }
+        }
+      )
+    );
+    const expiresAt = new Date(Date.now() + 5).toISOString();
+
+    const response = await postUpload(app, { file: makeFile(), expiresAt });
+
+    expect(response.status).toBe(201);
+    expect(capturedUpdates).toContainEqual({
+      status: 'expired',
+      activatedAt: expect.any(Date)
+    });
+    expect(capturedExpireEnqueues).toHaveLength(0);
+    expect(capturedCleanupEnqueues).toEqual([
+      {
+        fileId: 'test-file-id',
+        objectKey: expect.stringMatching(/^objects\//),
+        delayMs: undefined
+      }
+    ]);
+  });
+
+  test('still returns 201 when cleanup enqueue fails for an already-expired activation', async () => {
+    const app = buildApp(
+      makeMockDeps(
+        {},
+        {
+          headImpl: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+
+            return {
+              contentLength: 1024,
+              contentType: 'text/plain'
+            };
+          }
+        },
+        { enqueueCleanupShouldThrow: true }
+      )
+    );
+    const expiresAt = new Date(Date.now() + 5).toISOString();
 
     const response = await postUpload(app, { file: makeFile(), expiresAt });
 
@@ -615,5 +730,61 @@ describe('uploadRequestSchema — MIME type validation', () => {
       expiresAt: null
     });
     expect(result.success).toBe(true);
+  });
+});
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+
+describe('POST /upload — rate limiting', () => {
+  // UPLOAD_RATE_LIMIT_PER_HOUR = 20; a count of 21 exceeds it.
+  const OVER_LIMIT = 21;
+
+  test('returns 429 when per-IP upload rate limit is exceeded', async () => {
+    const app = buildApp({
+      ...makeMockDeps(),
+      getRedis: () => makeRedis({ count: OVER_LIMIT })
+    });
+
+    const res = await postUpload(app, { file: makeFile() }, { 'x-forwarded-for': '10.0.0.1' });
+
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as { ok: boolean; error: { code: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe(API_ERROR_CODES.RATE_LIMITED);
+  });
+
+  test('uses the configured upload rate limit loader when provided', async () => {
+    const app = buildApp({
+      ...makeMockDeps(),
+      getRedis: () => makeRedis({ count: 6 }),
+      loadUploadRateLimit: async () => 5
+    });
+
+    const res = await postUpload(app, { file: makeFile() }, { 'x-forwarded-for': '10.0.0.1' });
+
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as { ok: boolean; error: { code: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe(API_ERROR_CODES.RATE_LIMITED);
+  });
+
+  test('bypasses rate limiting when no IP header is present', async () => {
+    // No x-forwarded-for / x-real-ip header → ipHash is null → rate check is skipped.
+    // No Redis double injected — if it were called it would throw.
+    const app = buildApp(makeMockDeps());
+    const res = await postUpload(app, { file: makeFile() });
+
+    expect(res.status).toBe(201);
+  });
+
+  test('continues upload when Redis rate limiter is unavailable', async () => {
+    const app = buildApp({
+      ...makeMockDeps(),
+      getRedis: () => makeFailingRedis()
+    });
+
+    const res = await postUpload(app, { file: makeFile() }, { 'x-forwarded-for': '10.0.0.1' });
+
+    expect(res.status).toBe(201);
   });
 });

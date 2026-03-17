@@ -9,6 +9,7 @@ import { logger } from '@anonshare/infrastructure/logger';
 import { closeRedisClient } from '@anonshare/infrastructure/redis';
 import { storageAdapter } from '@anonshare/infrastructure/storage';
 import { Queue, Worker } from 'bullmq';
+import { registerReconcileScheduler } from './bootstrap/register-reconcile-scheduler';
 import { makeHandleCleanupFile } from './handlers/cleanup-file';
 import { makeHandleExpireFile } from './handlers/expire-file';
 import { makeHandleReconcile } from './handlers/reconcile';
@@ -78,18 +79,7 @@ await Promise.all([
 
 // ─── Recurring reconciliation scheduler ──────────────────────────────────────
 
-await reconcileQueue.upsertJobScheduler(
-  'reconcile-periodic',
-  { every: 60 * 60 * 1000 }, // every hour
-  { name: 'reconcile', data: {} }
-);
-
-logger.info('Reconciliation scheduler registered', {
-  actor: 'worker',
-  event: 'reconcile_scheduler_registered',
-  entity: { type: 'queue', id: QUEUE_RECONCILE },
-  outcome: 'success'
-});
+await registerReconcileScheduler(reconcileQueue);
 
 // ─── Error logging ────────────────────────────────────────────────────────────
 

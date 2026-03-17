@@ -1,6 +1,8 @@
 import { Redis } from 'ioredis';
 import { redis as redisCfg } from '../config/index';
 
+export type { Redis };
+
 let _client: Redis | null = null;
 
 /**
