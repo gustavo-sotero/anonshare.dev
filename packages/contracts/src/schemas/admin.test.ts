@@ -2,9 +2,12 @@ import { describe, expect, test } from 'bun:test';
 import {
   accessDeniedResponseSchema,
   adminAnomaliesResponseSchema,
+  adminFileDetailResponseSchema,
+  adminFileListQuerySchema,
   adminLifecycleStatsResponseSchema,
   adminLoginCallbackSchema,
   adminLoginStartResponseSchema,
+  adminReportListQuerySchema,
   adminSessionResponseSchema,
   moderationActionSchema,
   operationalAnomalySummarySchema,
@@ -327,5 +330,91 @@ describe('operational anomaly admin schemas', () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  test('accepts admin file detail with storage state and recent download activity', () => {
+    const result = adminFileDetailResponseSchema.safeParse({
+      file: {
+        id: crypto.randomUUID(),
+        token: 'AdminToken12345678',
+        sanitizedFilename: 'evidence.txt',
+        mimeType: 'text/plain',
+        sizeBytes: 2048,
+        status: 'active',
+        reportCount: 2,
+        allowPreview: false,
+        oneTimeDownload: false,
+        expiresAt: null,
+        uploadedAt: new Date('2026-03-18T12:00:00Z').toISOString(),
+        activatedAt: new Date('2026-03-18T12:00:01Z').toISOString(),
+        consumedAt: null,
+        deletedAt: null,
+        storageObject: {
+          objectKey: 'objects/evidence',
+          status: 'present',
+          contentLength: 2048,
+          contentType: 'text/plain',
+          checkedAt: new Date('2026-03-18T12:30:00Z').toISOString(),
+          error: null
+        },
+        downloadActivity: {
+          total: 3,
+          recent: [
+            {
+              id: crypto.randomUUID(),
+              fileId: crypto.randomUUID(),
+              eventType: 'completed',
+              createdAt: new Date('2026-03-18T12:10:00Z').toISOString(),
+              ipHash: 'abc123'
+            }
+          ]
+        },
+        reports: [],
+        moderationHistory: []
+      }
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  test('accepts admin file list filters for policy, upload date, and report volume', () => {
+    const result = adminFileListQuerySchema.safeParse({
+      status: 'hidden',
+      policy: 'one_time',
+      sortBy: 'reportCount_desc',
+      uploadedWithinDays: '7',
+      minReportCount: '3',
+      page: '2',
+      pageSize: '20'
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data).toMatchObject({
+      policy: 'one_time',
+      sortBy: 'reportCount_desc',
+      uploadedWithinDays: 7,
+      minReportCount: 3,
+      page: 2,
+      pageSize: 20
+    });
+  });
+
+  test('accepts admin report list filters for reason and urgency', () => {
+    const result = adminReportListQuerySchema.safeParse({
+      status: 'pending',
+      reason: 'malware',
+      urgency: 'high',
+      page: '1',
+      pageSize: '10'
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data).toMatchObject({
+      status: 'pending',
+      reason: 'malware',
+      urgency: 'high',
+      page: 1,
+      pageSize: 10
+    });
   });
 });

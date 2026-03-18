@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { canReportUnavailableFile } from './share-reporting';
+import { canReportUnavailableFile } from './reporting';
 
 describe('canReportUnavailableFile', () => {
   it('allows reports for expired links', () => {

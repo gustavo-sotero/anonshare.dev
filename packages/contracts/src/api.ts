@@ -36,26 +36,39 @@ export type {
 export type {
   AccessDeniedResponse,
   AdminAnomaliesResponse,
+  AdminDownloadEventSummary,
+  AdminDownloadListResponse,
   AdminFileDetail,
   AdminFileDetailResponse,
+  AdminFileDownloadActivity,
   AdminFileListQuery,
   AdminFileListResponse,
+  AdminFilePolicyFilter,
+  AdminFileSort,
   AdminFileSummary,
   AdminLifecycleStatsResponse,
   AdminLoginCallback,
   AdminLoginStartResponse,
   AdminModerationActionSummary,
+  AdminOverviewResponse,
   AdminReportListQuery,
   AdminReportListResponse,
   AdminReportSummary,
+  AdminReportUrgency,
   AdminSession,
   AdminSessionResponse,
+  AdminStorageObjectState,
   ModerationAction,
   ModerationResult,
   OperationalAnomalySeverity,
   OperationalAnomalySummary,
   QueueHealthSnapshot,
   ResolveReportAction
+} from './schemas/admin';
+export {
+  ADMIN_FILE_POLICY_VALUES,
+  ADMIN_FILE_SORT_VALUES,
+  ADMIN_REPORT_URGENCY_VALUES
 } from './schemas/admin';
 
 // ─── Job payloads (shared between API and worker) ────────────────────────────

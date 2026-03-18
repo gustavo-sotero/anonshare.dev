@@ -3,7 +3,7 @@ import { isPreviewSupported } from '@anonshare/domain';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { useCallback, useEffect, useState } from 'react';
 import { SiteFrame } from '~/components/site-frame';
-import { canReportUnavailableFile } from './share-reporting';
+import { canReportUnavailableFile } from '~/share/reporting';
 
 // ─── Loader result type (shared between head, loader, and component) ──────────
 

@@ -3,6 +3,7 @@ import { logger } from '@anonshare/infrastructure/logger';
 import { Hono } from 'hono';
 import { secureHeaders } from 'hono/secure-headers';
 import { adminRouter } from './routes/admin';
+import { authRouter } from './routes/auth';
 import { internalRouter } from './routes/internal';
 import { reportRouter } from './routes/report';
 import { shareRouter } from './routes/share';
@@ -80,6 +81,7 @@ export function createApiApp(options: ApiAppOptions = {}): Hono {
   app.route('/share', shareRouter);
   app.route('/report', reportRouter);
   app.route('/admin', adminRouter);
+  app.route('/admin/auth', authRouter);
   app.route('/_internal', internalRouter);
 
   return app;

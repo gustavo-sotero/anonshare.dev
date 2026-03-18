@@ -9,6 +9,7 @@ import { auth as authConfig } from '@anonshare/infrastructure/config';
 import { createDb } from '@anonshare/infrastructure/db';
 import {
   adminSessions,
+  downloadEvents,
   fileModerationActions,
   files,
   operationalAnomalies,
@@ -20,7 +21,8 @@ import {
   RATE_LIMIT_BLOCKED_METRIC_SURFACES
 } from '@anonshare/infrastructure/rate-limit';
 import { getRedisClient } from '@anonshare/infrastructure/redis';
-import { and, asc, count, desc, eq, gte, isNotNull, isNull, sql } from 'drizzle-orm';
+import { type StorageHeadObject, storageAdapter } from '@anonshare/infrastructure/storage';
+import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { type Context, Hono } from 'hono';
 import {
   enqueueCleanupFileJob,
@@ -32,6 +34,13 @@ import {
 const ADMIN_SESSION_COOKIE_NAME = 'anonshare_admin_session';
 const DEFAULT_ANOMALY_LIMIT = 50;
 const MAX_ANOMALY_LIMIT = 200;
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
+const FILE_DETAIL_REPORT_LIMIT = 100;
+const FILE_DETAIL_MODERATION_HISTORY_LIMIT = 100;
+
+const HIGH_URGENCY_REPORT_REASONS = ['illegal_content', 'malware'] as const;
+const MEDIUM_URGENCY_REPORT_REASONS = ['copyright_violation', 'spam'] as const;
+const LOW_URGENCY_REPORT_REASONS = ['other'] as const;
 
 type LifecycleQueueName = 'expire-file' | 'cleanup-file' | 'reconcile';
 
@@ -66,6 +75,16 @@ type ReportStatusCountRecord = {
 type DailyCountRecord = {
   day: string;
   count: number;
+};
+
+type FileStatusCountRecord = {
+  status: typeof files.$inferSelect.status;
+  count: number;
+  totalSizeBytes: number;
+};
+
+type DownloadCountRecord = {
+  totalDownloads: number;
 };
 
 type QueueJobSample = {
@@ -126,8 +145,11 @@ export type AdminRouterDeps = {
     startInclusiveUtc: Date,
     windowDays: number
   ) => Promise<DailyCountRecord[]>;
+  listFileStatusCounts?: () => Promise<FileStatusCountRecord[]>;
+  getDownloadCounts?: () => Promise<DownloadCountRecord>;
   getAllowedGithubUserId?: () => string;
   getQueues?: () => QueueStatsReader[];
+  headStorageObject?: (objectKey: string) => Promise<StorageHeadObject | null>;
   now?: () => Date;
   enqueueCleanupFile?: (fileId: string, objectKey: string, delayMs?: number) => Promise<void>;
   getDb?: () => ReturnType<typeof createDb>;
@@ -173,6 +195,10 @@ function getRequestId(c: Context): string {
   return c.req.header('x-request-id') ?? crypto.randomUUID();
 }
 
+function setNoStoreHeaders(c: Context): void {
+  c.header('cache-control', 'no-store');
+}
+
 function withTimeout<T>(
   operation: Promise<T>,
   queueName: string,
@@ -202,6 +228,30 @@ function getSessionId(c: Context): string | null {
     c.req.header('x-admin-session-id') ??
     readCookieValue(c.req.header('cookie'), ADMIN_SESSION_COOKIE_NAME)
   );
+}
+
+function getReportUrgency(reason: typeof reports.$inferSelect.reason): 'low' | 'medium' | 'high' {
+  switch (reason) {
+    case 'illegal_content':
+    case 'malware':
+      return 'high';
+    case 'copyright_violation':
+    case 'spam':
+      return 'medium';
+    case 'other':
+      return 'low';
+  }
+}
+
+function getReportUrgencyReasonFilter(urgency: 'low' | 'medium' | 'high') {
+  switch (urgency) {
+    case 'high':
+      return HIGH_URGENCY_REPORT_REASONS;
+    case 'medium':
+      return MEDIUM_URGENCY_REPORT_REASONS;
+    case 'low':
+      return LOW_URGENCY_REPORT_REASONS;
+  }
 }
 
 function getFallbackSeverity(type: AnomalyRecord['type']): OperationalAnomalySeverity {
@@ -374,8 +424,25 @@ function resolveRestoredFileStatus(params: {
     return 'expired';
   }
 
-  if (latestHiddenPreviousStatus === 'active' || latestHiddenPreviousStatus === 'expiring') {
+  if (
+    latestHiddenPreviousStatus === 'pending_upload' ||
+    latestHiddenPreviousStatus === 'active' ||
+    latestHiddenPreviousStatus === 'expiring' ||
+    latestHiddenPreviousStatus === 'expired' ||
+    latestHiddenPreviousStatus === 'consumed' ||
+    latestHiddenPreviousStatus === 'missing'
+  ) {
     return latestHiddenPreviousStatus;
+  }
+
+  // Fall back to terminal or pre-activation states when legacy moderation
+  // rows are missing the prior status.
+  if (file.consumedAt !== null) {
+    return 'consumed';
+  }
+
+  if (file.activatedAt === null) {
+    return 'pending_upload';
   }
 
   return 'active';
@@ -517,6 +584,28 @@ async function defaultListRateLimitBlockedCountsByDay(
     startInclusiveUtc,
     windowDays
   );
+}
+
+async function defaultListFileStatusCounts(): Promise<FileStatusCountRecord[]> {
+  return getDb()
+    .select({
+      status: files.status,
+      count: sql<number>`count(*)::int`,
+      totalSizeBytes: sql<number>`coalesce(sum(${files.sizeBytes}), 0)::bigint::int8`
+    })
+    .from(files)
+    .groupBy(files.status);
+}
+
+async function defaultGetDownloadCounts(): Promise<DownloadCountRecord> {
+  const [row] = await getDb()
+    .select({
+      totalDownloads: sql<number>`count(*)::int`
+    })
+    .from(downloadEvents)
+    .where(eq(downloadEvents.eventType, 'completed'));
+
+  return { totalDownloads: row?.totalDownloads ?? 0 };
 }
 
 function defaultGetQueues(): QueueStatsReader[] {
@@ -708,14 +797,22 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
       deps.listDismissedReportCountsByDay ?? defaultListDismissedReportCountsByDay,
     listRateLimitBlockedCountsByDay:
       deps.listRateLimitBlockedCountsByDay ?? defaultListRateLimitBlockedCountsByDay,
+    listFileStatusCounts: deps.listFileStatusCounts ?? defaultListFileStatusCounts,
+    getDownloadCounts: deps.getDownloadCounts ?? defaultGetDownloadCounts,
     getAllowedGithubUserId: deps.getAllowedGithubUserId ?? authConfig.githubAllowedUserId,
     getQueues: deps.getQueues ?? defaultGetQueues,
+    headStorageObject: deps.headStorageObject ?? storageAdapter.head,
     now: deps.now ?? (() => new Date()),
     enqueueCleanupFile: deps.enqueueCleanupFile ?? enqueueCleanupFileJob,
     getDb: deps.getDb ?? getDb
   };
 
   const router = new Hono();
+
+  router.use('*', async (c, next) => {
+    setNoStoreHeaders(c);
+    await next();
+  });
 
   router.get('/session', async (c) => {
     const sessionId = getSessionId(c);
@@ -754,6 +851,52 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
         requestId: getRequestId(c),
         actor: 'admin',
         entity: { type: 'admin_session', id: sessionId },
+        outcome: 'failure',
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return c.json({ error: 'internal_error' }, 500);
+    }
+  });
+
+  // ─── GET /overview ───────────────────────────────────────────────────────
+  // Returns file counts by status, total storage, and download volume.
+  router.get('/overview', async (c) => {
+    const auth = await requireAdminSession(c, resolvedDeps);
+    if (!auth.ok) return auth.response;
+
+    const requestId = getRequestId(c);
+
+    try {
+      const [fileStatusCounts, downloadCounts] = await Promise.all([
+        resolvedDeps.listFileStatusCounts(),
+        resolvedDeps.getDownloadCounts()
+      ]);
+
+      const byStatus: Record<string, number> = {};
+      let totalFiles = 0;
+      let totalStorageBytes = 0;
+
+      for (const row of fileStatusCounts) {
+        byStatus[row.status] = row.count;
+        totalFiles += row.count;
+        totalStorageBytes += Number(row.totalSizeBytes);
+      }
+
+      return c.json(
+        {
+          totalFiles,
+          byStatus,
+          totalStorageBytes,
+          totalDownloads: downloadCounts.totalDownloads
+        },
+        200
+      );
+    } catch (err) {
+      logger.error('Admin overview query failed', {
+        event: 'admin_overview_query_failed',
+        requestId,
+        actor: 'admin',
+        entity: { type: 'http_request', id: c.req.path },
         outcome: 'failure',
         error: err instanceof Error ? err.message : String(err)
       });
@@ -922,6 +1065,10 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
 
     const queryParsed = adminFileListQuerySchema.safeParse({
       status: c.req.query('status'),
+      policy: c.req.query('policy'),
+      sortBy: c.req.query('sortBy'),
+      uploadedWithinDays: c.req.query('uploadedWithinDays'),
+      minReportCount: c.req.query('minReportCount'),
       page: c.req.query('page'),
       pageSize: c.req.query('pageSize')
     });
@@ -933,21 +1080,54 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
       );
     }
 
-    const { status, page, pageSize } = queryParsed.data;
+    const { status, policy, sortBy, uploadedWithinDays, minReportCount, page, pageSize } =
+      queryParsed.data;
     const offset = (page - 1) * pageSize;
+
+    const orderByClause =
+      sortBy === 'sizeBytes_desc'
+        ? desc(files.sizeBytes)
+        : sortBy === 'reportCount_desc'
+          ? desc(files.reportCount)
+          : desc(files.uploadedAt);
 
     try {
       const db = resolvedDeps.getDb();
-      const where = status ? eq(files.status, status) : undefined;
+      let where = status ? eq(files.status, status) : undefined;
+
+      if (policy === 'one_time') {
+        const oneTimeCondition = eq(files.oneTimeDownload, true);
+        where = where ? and(where, oneTimeCondition) : oneTimeCondition;
+      }
+
+      if (policy === 'preview_enabled') {
+        const previewCondition = eq(files.allowPreview, true);
+        where = where ? and(where, previewCondition) : previewCondition;
+      }
+
+      if (policy === 'standard') {
+        const standardPolicyCondition = and(
+          eq(files.oneTimeDownload, false),
+          eq(files.allowPreview, false)
+        );
+        where = where ? and(where, standardPolicyCondition) : standardPolicyCondition;
+      }
+
+      if (uploadedWithinDays !== undefined) {
+        const uploadedAfter = new Date(
+          resolvedDeps.now().getTime() - uploadedWithinDays * DAY_IN_MS
+        );
+        const uploadedAfterCondition = gte(files.uploadedAt, uploadedAfter);
+        where = where ? and(where, uploadedAfterCondition) : uploadedAfterCondition;
+      }
+
+      if (minReportCount !== undefined) {
+        const minReportCountCondition = gte(files.reportCount, minReportCount);
+        where = where ? and(where, minReportCountCondition) : minReportCountCondition;
+      }
 
       const [rows, [totalRow]] = await Promise.all([
-        db
-          .select()
-          .from(files)
-          .where(where)
-          .orderBy(desc(files.uploadedAt))
-          .limit(pageSize)
-          .offset(offset),
+        db.select().from(files).where(where).orderBy(orderByClause).limit(pageSize).offset(offset),
         db.select({ total: count() }).from(files).where(where)
       ]);
 
@@ -1003,18 +1183,82 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
         return c.json({ ok: false, error: { code: 'not_found', message: 'File not found.' } }, 404);
       }
 
-      const [fileReports, moderationHistory] = await Promise.all([
-        db
-          .select()
-          .from(reports)
-          .where(eq(reports.fileId, fileId))
-          .orderBy(desc(reports.createdAt)),
-        db
-          .select()
-          .from(fileModerationActions)
-          .where(eq(fileModerationActions.fileId, fileId))
-          .orderBy(desc(fileModerationActions.createdAt))
-      ]);
+      const storageCheckedAt = resolvedDeps.now();
+
+      const [fileReports, moderationHistory, recentDownloadEvents, [downloadTotalsRow]] =
+        await Promise.all([
+          db
+            .select()
+            .from(reports)
+            .where(eq(reports.fileId, fileId))
+            .orderBy(desc(reports.createdAt))
+            .limit(FILE_DETAIL_REPORT_LIMIT),
+          db
+            .select()
+            .from(fileModerationActions)
+            .where(eq(fileModerationActions.fileId, fileId))
+            .orderBy(desc(fileModerationActions.createdAt))
+            .limit(FILE_DETAIL_MODERATION_HISTORY_LIMIT),
+          db
+            .select({
+              id: downloadEvents.id,
+              fileId: downloadEvents.fileId,
+              eventType: downloadEvents.eventType,
+              createdAt: downloadEvents.createdAt,
+              ipHash: downloadEvents.ipHash
+            })
+            .from(downloadEvents)
+            .where(eq(downloadEvents.fileId, fileId))
+            .orderBy(desc(downloadEvents.createdAt))
+            .limit(10),
+          db
+            .select({ total: count() })
+            .from(downloadEvents)
+            .where(eq(downloadEvents.fileId, fileId))
+        ]);
+
+      let storageObject: {
+        objectKey: string;
+        status: 'present' | 'missing' | 'unknown';
+        contentLength: number | null;
+        contentType: string | null;
+        checkedAt: string;
+        error: string | null;
+      };
+
+      try {
+        const storageHead = await resolvedDeps.headStorageObject(file.objectKey);
+
+        storageObject = {
+          objectKey: file.objectKey,
+          status: storageHead ? 'present' : 'missing',
+          contentLength: storageHead?.contentLength ?? null,
+          contentType: storageHead?.contentType ?? null,
+          checkedAt: storageCheckedAt.toISOString(),
+          error: null
+        };
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err);
+
+        logger.warn('Admin file storage inspection degraded', {
+          event: 'admin_file_storage_inspection_degraded',
+          requestId,
+          actor: 'admin',
+          entity: { type: 'file', id: fileId },
+          outcome: 'failure',
+          objectKey: file.objectKey,
+          error
+        });
+
+        storageObject = {
+          objectKey: file.objectKey,
+          status: 'unknown',
+          contentLength: null,
+          contentType: null,
+          checkedAt: storageCheckedAt.toISOString(),
+          error
+        };
+      }
 
       return c.json(
         {
@@ -1033,10 +1277,22 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
             activatedAt: file.activatedAt?.toISOString() ?? null,
             consumedAt: file.consumedAt?.toISOString() ?? null,
             deletedAt: file.deletedAt?.toISOString() ?? null,
+            storageObject,
+            downloadActivity: {
+              total: downloadTotalsRow?.total ?? 0,
+              recent: recentDownloadEvents.map((event) => ({
+                id: event.id,
+                fileId: event.fileId,
+                eventType: event.eventType,
+                createdAt: event.createdAt.toISOString(),
+                ipHash: event.ipHash
+              }))
+            },
             reports: fileReports.map((r) => ({
               id: r.id,
               fileId: r.fileId,
               reason: r.reason,
+              urgency: getReportUrgency(r.reason),
               message: r.message,
               status: r.status,
               resolvedBy: r.resolvedBy,
@@ -1125,6 +1381,18 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
             409
           );
         }
+        if (file.status !== 'active' && file.status !== 'expiring') {
+          return c.json(
+            {
+              ok: false,
+              error: {
+                code: 'conflict',
+                message: 'Only active or expiring files can be hidden.'
+              }
+            },
+            409
+          );
+        }
         nextStatus = 'hidden';
       } else if (action === 'restore') {
         if (file.status !== 'hidden') {
@@ -1191,10 +1459,10 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
       logger.info('Admin moderation action applied', {
         event:
           action === 'hide'
-            ? 'file.hidden'
+            ? 'admin.file_hidden'
             : action === 'restore'
-              ? 'file.restored'
-              : 'file.deleted',
+              ? 'admin.file_restored'
+              : 'admin.file_deleted',
         requestId,
         actor: 'admin',
         entity: { type: 'file', id: fileId },
@@ -1250,6 +1518,8 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
     const queryParsed = adminReportListQuerySchema.safeParse({
       status: c.req.query('status'),
       fileId: c.req.query('fileId'),
+      reason: c.req.query('reason'),
+      urgency: c.req.query('urgency'),
       page: c.req.query('page'),
       pageSize: c.req.query('pageSize')
     });
@@ -1261,21 +1531,27 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
       );
     }
 
-    const { status, fileId, page, pageSize } = queryParsed.data;
+    const { status, fileId, reason, urgency, page, pageSize } = queryParsed.data;
     const offset = (page - 1) * pageSize;
 
     try {
       const db = resolvedDeps.getDb();
+      let where = status ? eq(reports.status, status) : undefined;
 
-      const conditions = [
-        status ? eq(reports.status, status) : null,
-        fileId ? eq(reports.fileId, fileId) : null
-      ].filter(Boolean);
+      if (fileId) {
+        const fileIdCondition = eq(reports.fileId, fileId);
+        where = where ? and(where, fileIdCondition) : fileIdCondition;
+      }
 
-      const where =
-        conditions.length > 0
-          ? and(...(conditions as [ReturnType<typeof eq>, ...ReturnType<typeof eq>[]]))
-          : undefined;
+      if (reason) {
+        const reasonCondition = eq(reports.reason, reason);
+        where = where ? and(where, reasonCondition) : reasonCondition;
+      }
+
+      if (urgency) {
+        const urgencyCondition = inArray(reports.reason, getReportUrgencyReasonFilter(urgency));
+        where = where ? and(where, urgencyCondition) : urgencyCondition;
+      }
 
       const [rows, [totalRow]] = await Promise.all([
         db
@@ -1294,6 +1570,7 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
             id: r.id,
             fileId: r.fileId,
             reason: r.reason,
+            urgency: getReportUrgency(r.reason),
             message: r.message,
             status: r.status,
             resolvedBy: r.resolvedBy,
@@ -1376,7 +1653,7 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
         .where(eq(reports.id, reportId));
 
       logger.info('Report resolved', {
-        event: action === 'resolved' ? 'report.resolved' : 'report.dismissed',
+        event: action === 'resolved' ? 'admin.report_resolved' : 'admin.report_dismissed',
         requestId,
         actor: 'admin',
         entity: { type: 'report', id: reportId },
@@ -1399,6 +1676,70 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
         requestId,
         actor: 'admin',
         entity: { type: 'report', id: reportId },
+        outcome: 'failure',
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return c.json({ error: 'internal_error' }, 500);
+    }
+  });
+
+  // ─── GET /downloads ──────────────────────────────────────────────────────
+  // Returns recent download events with optional file filter.
+  router.get('/downloads', async (c) => {
+    const auth = await requireAdminSession(c, resolvedDeps);
+    if (!auth.ok) return auth.response;
+
+    const requestId = getRequestId(c);
+    const fileId = c.req.query('fileId');
+    const rawPage = Number(c.req.query('page') || '1');
+    const rawPageSize = Number(c.req.query('pageSize') || '50');
+    const page = Number.isInteger(rawPage) && rawPage >= 1 ? rawPage : 1;
+    const pageSize =
+      Number.isInteger(rawPageSize) && rawPageSize >= 1 ? Math.min(rawPageSize, 100) : 50;
+    const offset = (page - 1) * pageSize;
+
+    try {
+      const db = resolvedDeps.getDb();
+      const where = fileId ? eq(downloadEvents.fileId, fileId) : undefined;
+
+      const [rows, [totalRow]] = await Promise.all([
+        db
+          .select({
+            id: downloadEvents.id,
+            fileId: downloadEvents.fileId,
+            eventType: downloadEvents.eventType,
+            createdAt: downloadEvents.createdAt,
+            ipHash: downloadEvents.ipHash
+          })
+          .from(downloadEvents)
+          .where(where)
+          .orderBy(desc(downloadEvents.createdAt))
+          .limit(pageSize)
+          .offset(offset),
+        db.select({ total: count() }).from(downloadEvents).where(where)
+      ]);
+
+      return c.json(
+        {
+          downloads: rows.map((d) => ({
+            id: d.id,
+            fileId: d.fileId,
+            eventType: d.eventType,
+            createdAt: d.createdAt.toISOString(),
+            ipHash: d.ipHash
+          })),
+          total: totalRow?.total ?? 0,
+          page,
+          pageSize
+        },
+        200
+      );
+    } catch (err) {
+      logger.error('Admin downloads list failed', {
+        event: 'admin_downloads_list_failed',
+        requestId,
+        actor: 'admin',
+        entity: { type: 'http_request', id: c.req.path },
         outcome: 'failure',
         error: err instanceof Error ? err.message : String(err)
       });

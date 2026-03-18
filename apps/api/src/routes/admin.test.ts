@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
   adminAnomaliesResponseSchema,
+  adminDownloadListResponseSchema,
   adminLifecycleStatsResponseSchema,
+  adminOverviewResponseSchema,
   adminSessionResponseSchema
 } from '@anonshare/contracts';
 import type { createDb } from '@anonshare/infrastructure/db';
@@ -79,6 +81,7 @@ describe('GET /admin/session', () => {
     const response = await request(app, '/admin/session');
 
     expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
     expect(adminSessionResponseSchema.safeParse(await response.json()).success).toBe(true);
   });
 
@@ -224,6 +227,7 @@ describe('GET /admin/stats', () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
     expect(adminLifecycleStatsResponseSchema.safeParse(body).success).toBe(true);
     expect(body.openAnomaliesTotal).toBe(3);
     expect(body.openAnomaliesByType).toEqual({ missing_object: 2, orphaned_object: 1 });
@@ -646,6 +650,53 @@ describe('GET /admin/files', () => {
     expect(response.status).toBe(200);
   });
 
+  test('accepts policy, upload window, and minimum report count filters', async () => {
+    const db = makeAdminDb({ selectResults: [[], [{ total: 0 }]] });
+    const app = buildApp(makeAuthDeps(db));
+
+    const response = await request(
+      app,
+      '/admin/files?policy=one_time&uploadedWithinDays=7&minReportCount=2',
+      {
+        'x-admin-session-id': 'session-1'
+      }
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  test('accepts sortBy=sizeBytes_desc', async () => {
+    const db = makeAdminDb({ selectResults: [[], [{ total: 0 }]] });
+    const app = buildApp(makeAuthDeps(db));
+
+    const response = await request(app, '/admin/files?sortBy=sizeBytes_desc', {
+      'x-admin-session-id': 'session-1'
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ files: [], total: 0, page: 1 });
+  });
+
+  test('accepts sortBy=reportCount_desc', async () => {
+    const db = makeAdminDb({ selectResults: [[], [{ total: 0 }]] });
+    const app = buildApp(makeAuthDeps(db));
+
+    const response = await request(app, '/admin/files?sortBy=reportCount_desc', {
+      'x-admin-session-id': 'session-1'
+    });
+    expect(response.status).toBe(200);
+  });
+
+  test('returns 400 for invalid sortBy value', async () => {
+    const db = makeAdminDb();
+    const app = buildApp(makeAuthDeps(db));
+
+    const response = await request(app, '/admin/files?sortBy=badSort', {
+      'x-admin-session-id': 'session-1'
+    });
+    expect(response.status).toBe(400);
+  });
+
   test('returns 400 for invalid status value', async () => {
     const db = makeAdminDb();
     const app = buildApp(makeAuthDeps(db));
@@ -673,12 +724,25 @@ describe('GET /admin/files/:id', () => {
   test('returns file with reports and moderation history', async () => {
     const file = makeAdminFile();
     const report = makeAdminReport();
+    const recentDownloadEvent = {
+      id: '00000000-0000-4000-8000-000000000201',
+      fileId: file.id,
+      eventType: 'completed',
+      createdAt: new Date('2026-03-15T09:45:00Z'),
+      ipHash: 'abc123'
+    };
     const db = makeAdminDb({
       fileLookup: file,
-      // parallel select calls: reports, then moderation actions
-      selectResults: [[report], []]
+      selectResults: [[report], [], [recentDownloadEvent], [{ total: 4 }]]
     });
-    const app = buildApp(makeAuthDeps(db));
+    const app = buildApp(
+      makeAuthDeps(db, {
+        headStorageObject: async () => ({
+          contentLength: file.sizeBytes,
+          contentType: file.mimeType
+        })
+      })
+    );
 
     const response = await request(app, `/admin/files/${file.id}`, {
       'x-admin-session-id': 'session-1'
@@ -689,7 +753,57 @@ describe('GET /admin/files/:id', () => {
     expect(body.file.id).toBe(file.id);
     expect(body.file.reports).toHaveLength(1);
     expect(body.file.reports[0].id).toBe(report.id);
+    expect(body.file.reports[0].urgency).toBe('medium');
     expect(body.file.moderationHistory).toHaveLength(0);
+    expect(body.file.storageObject).toEqual({
+      objectKey: file.objectKey,
+      status: 'present',
+      contentLength: file.sizeBytes,
+      contentType: file.mimeType,
+      checkedAt: FIXED_ADMIN_NOW.toISOString(),
+      error: null
+    });
+    expect(body.file.downloadActivity.total).toBe(4);
+    expect(body.file.downloadActivity.recent).toEqual([
+      {
+        id: recentDownloadEvent.id,
+        fileId: file.id,
+        eventType: 'completed',
+        createdAt: recentDownloadEvent.createdAt.toISOString(),
+        ipHash: 'abc123'
+      }
+    ]);
+  });
+
+  test('returns degraded storage detail without failing the file inspection payload', async () => {
+    const file = makeAdminFile();
+    const db = makeAdminDb({
+      fileLookup: file,
+      selectResults: [[], [], [], [{ total: 0 }]]
+    });
+    const app = buildApp(
+      makeAuthDeps(db, {
+        headStorageObject: async () => {
+          throw new Error('storage unavailable');
+        }
+      })
+    );
+
+    const response = await request(app, `/admin/files/${file.id}`, {
+      'x-admin-session-id': 'session-1'
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.file.storageObject).toEqual({
+      objectKey: file.objectKey,
+      status: 'unknown',
+      contentLength: null,
+      contentType: null,
+      checkedAt: FIXED_ADMIN_NOW.toISOString(),
+      error: 'storage unavailable'
+    });
+    expect(body.file.downloadActivity).toEqual({ total: 0, recent: [] });
   });
 });
 
@@ -783,6 +897,27 @@ describe('POST /admin/files/:id/moderate', () => {
     expect(body.error.code).toBe('conflict');
   });
 
+  test('returns 409 when trying to hide a non-public lifecycle state', async () => {
+    const file = makeAdminFile({
+      status: 'consumed',
+      consumedAt: new Date('2026-03-15T09:00:00Z')
+    });
+    const db = makeAdminDb({ fileLookup: file });
+    const app = buildApp(makeAuthDeps(db));
+
+    const response = await jsonPost(
+      app,
+      `/admin/files/${file.id}/moderate`,
+      { action: 'hide' },
+      { 'x-admin-session-id': 'session-1' }
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error.code).toBe('conflict');
+    expect(body.error.message).toBe('Only active or expiring files can be hidden.');
+  });
+
   test('restores a hidden file', async () => {
     const file = makeAdminFile({ status: 'hidden' });
     const db = makeAdminDb({ fileLookup: file });
@@ -823,6 +958,31 @@ describe('POST /admin/files/:id/moderate', () => {
     expect(response.status).toBe(200);
     expect(body.data.previousStatus).toBe('hidden');
     expect(body.data.nextStatus).toBe('expiring');
+  });
+
+  test('restores a hidden file back to consumed when it was hidden from consumed state', async () => {
+    const file = makeAdminFile({
+      status: 'hidden',
+      oneTimeDownload: true,
+      consumedAt: new Date('2026-03-15T08:00:00Z')
+    });
+    const db = makeAdminDb({
+      fileLookup: file,
+      selectResults: [[{ previousStatus: 'consumed' }]]
+    });
+    const app = buildApp(makeAuthDeps(db));
+
+    const response = await jsonPost(
+      app,
+      `/admin/files/${file.id}/moderate`,
+      { action: 'restore' },
+      { 'x-admin-session-id': 'session-1' }
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.data.previousStatus).toBe('hidden');
+    expect(body.data.nextStatus).toBe('consumed');
   });
 
   test('restores a hidden file to expired when the expiration deadline already passed', async () => {
@@ -967,6 +1127,7 @@ describe('GET /admin/reports', () => {
     expect(response.status).toBe(200);
     expect(body.reports).toHaveLength(1);
     expect(body.reports[0].id).toBe(report.id);
+    expect(body.reports[0].urgency).toBe('medium');
     expect(body.total).toBe(1);
     expect(body.page).toBe(1);
   });
@@ -982,6 +1143,17 @@ describe('GET /admin/reports', () => {
         'x-admin-session-id': 'session-1'
       }
     );
+    expect(response.status).toBe(200);
+  });
+
+  test('accepts reason and urgency filters', async () => {
+    const db = makeAdminDb({ selectResults: [[], [{ total: 0 }]] });
+    const app = buildApp(makeAuthDeps(db));
+
+    const response = await request(app, '/admin/reports?reason=malware&urgency=high', {
+      'x-admin-session-id': 'session-1'
+    });
+
     expect(response.status).toBe(200);
   });
 
@@ -1126,5 +1298,126 @@ describe('POST /admin/reports/:id/resolve', () => {
       {}
     );
     expect(response.status).toBe(401);
+  });
+});
+
+// ── GET /admin/overview ───────────────────────────────────────────────────────
+
+describe('GET /admin/overview', () => {
+  test('returns 401 when no session is present', async () => {
+    const db = makeAdminDb();
+    const app = buildApp({ ...makeAuthDeps(db), findSessionById: async () => null });
+
+    const response = await app.request('http://localhost/admin/overview', { method: 'GET' });
+    expect(response.status).toBe(401);
+  });
+
+  test('returns file counts by status, total storage, and download totals', async () => {
+    const db = makeAdminDb();
+    const app = buildApp({
+      ...makeAuthDeps(db),
+      listFileStatusCounts: async () => [
+        { status: 'active', count: 5, totalSizeBytes: 10240 },
+        { status: 'expired', count: 2, totalSizeBytes: 2048 },
+        { status: 'deleted', count: 1, totalSizeBytes: 512 }
+      ],
+      getDownloadCounts: async () => ({ totalDownloads: 20 })
+    });
+
+    const response = await request(app, '/admin/overview', {
+      'x-admin-session-id': 'session-1'
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(adminOverviewResponseSchema.safeParse(body).success).toBe(true);
+    expect(body.totalFiles).toBe(8);
+    expect(body.byStatus.active).toBe(5);
+    expect(body.byStatus.expired).toBe(2);
+    expect(body.byStatus.deleted).toBe(1);
+    expect(body.totalStorageBytes).toBe(12800);
+    expect(body.totalDownloads).toBe(20);
+  });
+
+  test('returns zero counts when no files exist', async () => {
+    const db = makeAdminDb();
+    const app = buildApp({
+      ...makeAuthDeps(db),
+      listFileStatusCounts: async () => [],
+      getDownloadCounts: async () => ({ totalDownloads: 0 })
+    });
+
+    const response = await request(app, '/admin/overview', {
+      'x-admin-session-id': 'session-1'
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.totalFiles).toBe(0);
+    expect(body.totalStorageBytes).toBe(0);
+    expect(body.totalDownloads).toBe(0);
+  });
+});
+
+// ── GET /admin/downloads ──────────────────────────────────────────────────────
+
+describe('GET /admin/downloads', () => {
+  test('returns 401 when not authenticated', async () => {
+    const db = makeAdminDb();
+    const app = buildApp({ ...makeAuthDeps(db), findSessionById: async () => null });
+
+    const response = await app.request('http://localhost/admin/downloads', { method: 'GET' });
+    expect(response.status).toBe(401);
+  });
+
+  test('returns paginated download events for valid session', async () => {
+    const downloadEvent = {
+      id: '00000000-0000-4000-8000-000000000055',
+      fileId: '00000000-0000-4000-8000-000000000099',
+      eventType: 'completed',
+      createdAt: new Date('2026-03-15T10:00:00Z'),
+      ipHash: null
+    };
+    const db = makeAdminDb({ selectResults: [[downloadEvent], [{ total: 1 }]] });
+    const app = buildApp(makeAuthDeps(db));
+
+    const response = await request(app, '/admin/downloads', {
+      'x-admin-session-id': 'session-1'
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(adminDownloadListResponseSchema.safeParse(body).success).toBe(true);
+    expect(body.downloads).toHaveLength(1);
+    expect(body.downloads[0].id).toBe(downloadEvent.id);
+    expect(body.downloads[0].eventType).toBe('completed');
+    expect(body.total).toBe(1);
+    expect(body.page).toBe(1);
+  });
+
+  test('returns empty list when no download events exist', async () => {
+    const db = makeAdminDb({ selectResults: [[], [{ total: 0 }]] });
+    const app = buildApp(makeAuthDeps(db));
+
+    const response = await request(app, '/admin/downloads', {
+      'x-admin-session-id': 'session-1'
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.downloads).toHaveLength(0);
+    expect(body.total).toBe(0);
+  });
+
+  test('accepts optional fileId filter', async () => {
+    const db = makeAdminDb({ selectResults: [[], [{ total: 0 }]] });
+    const app = buildApp(makeAuthDeps(db));
+
+    const response = await request(
+      app,
+      '/admin/downloads?fileId=00000000-0000-4000-8000-000000000099',
+      { 'x-admin-session-id': 'session-1' }
+    );
+    expect(response.status).toBe(200);
   });
 });

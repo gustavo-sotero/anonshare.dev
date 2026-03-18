@@ -1,4 +1,5 @@
 import {
+  DOWNLOAD_EVENT_TYPE_VALUES,
   FILE_MODERATION_ACTION_VALUES,
   FILE_STATUS_VALUES,
   OPERATIONAL_ANOMALY_SEVERITY_VALUES,
@@ -196,10 +197,15 @@ export const adminModerationActionSummarySchema = z.object({
 
 export type AdminModerationActionSummary = z.infer<typeof adminModerationActionSummarySchema>;
 
+export const ADMIN_REPORT_URGENCY_VALUES = ['low', 'medium', 'high'] as const;
+
+export type AdminReportUrgency = (typeof ADMIN_REPORT_URGENCY_VALUES)[number];
+
 export const adminReportSummarySchema = z.object({
   id: z.uuid(),
   fileId: z.uuid(),
   reason: z.enum(REPORT_REASON_VALUES),
+  urgency: z.enum(ADMIN_REPORT_URGENCY_VALUES),
   message: z.string().nullable(),
   status: z.enum(REPORT_STATUS_VALUES),
   resolvedBy: z.string().nullable(),
@@ -209,21 +215,23 @@ export const adminReportSummarySchema = z.object({
 
 export type AdminReportSummary = z.infer<typeof adminReportSummarySchema>;
 
-export const adminFileDetailSchema = adminFileSummarySchema.extend({
-  reports: z.array(adminReportSummarySchema),
-  moderationHistory: z.array(adminModerationActionSummarySchema)
-});
+export const ADMIN_FILE_POLICY_VALUES = ['standard', 'one_time', 'preview_enabled'] as const;
 
-export type AdminFileDetail = z.infer<typeof adminFileDetailSchema>;
+export type AdminFilePolicyFilter = (typeof ADMIN_FILE_POLICY_VALUES)[number];
 
-export const adminFileDetailResponseSchema = z.object({
-  file: adminFileDetailSchema
-});
-
-export type AdminFileDetailResponse = z.infer<typeof adminFileDetailResponseSchema>;
+export const ADMIN_FILE_SORT_VALUES = [
+  'uploadedAt_desc',
+  'sizeBytes_desc',
+  'reportCount_desc'
+] as const;
+export type AdminFileSort = (typeof ADMIN_FILE_SORT_VALUES)[number];
 
 export const adminFileListQuerySchema = z.object({
   status: z.enum(FILE_STATUS_VALUES).optional(),
+  policy: z.enum(ADMIN_FILE_POLICY_VALUES).optional(),
+  sortBy: z.enum(ADMIN_FILE_SORT_VALUES).optional().default('uploadedAt_desc'),
+  uploadedWithinDays: z.coerce.number().int().min(1).max(365).optional(),
+  minReportCount: z.coerce.number().int().min(0).max(10_000).optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(50)
 });
@@ -250,8 +258,75 @@ export type AdminReportListResponse = z.infer<typeof adminReportListResponseSche
 export const adminReportListQuerySchema = z.object({
   status: z.enum(REPORT_STATUS_VALUES).optional(),
   fileId: z.uuid().optional(),
+  reason: z.enum(REPORT_REASON_VALUES).optional(),
+  urgency: z.enum(ADMIN_REPORT_URGENCY_VALUES).optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(50)
 });
 
 export type AdminReportListQuery = z.infer<typeof adminReportListQuerySchema>;
+
+// ─── Overview (file counts, storage, downloads) ──────────────────────────────
+
+export const adminOverviewResponseSchema = z.object({
+  totalFiles: z.int().min(0),
+  byStatus: z.record(z.string(), z.int().min(0)),
+  totalStorageBytes: z.number().min(0),
+  totalDownloads: z.int().min(0)
+});
+
+export type AdminOverviewResponse = z.infer<typeof adminOverviewResponseSchema>;
+
+// ─── Download activity ───────────────────────────────────────────────────────
+
+export const adminDownloadEventSummarySchema = z.object({
+  id: z.uuid(),
+  fileId: z.uuid(),
+  eventType: z.enum(DOWNLOAD_EVENT_TYPE_VALUES),
+  createdAt: z.iso.datetime(),
+  ipHash: z.string().nullable()
+});
+
+export type AdminDownloadEventSummary = z.infer<typeof adminDownloadEventSummarySchema>;
+
+export const adminDownloadListResponseSchema = z.object({
+  downloads: z.array(adminDownloadEventSummarySchema),
+  total: z.int().min(0),
+  page: z.int().min(1),
+  pageSize: z.int().min(1)
+});
+
+export type AdminDownloadListResponse = z.infer<typeof adminDownloadListResponseSchema>;
+
+export const adminStorageObjectStateSchema = z.object({
+  objectKey: z.string().min(1),
+  status: z.enum(['present', 'missing', 'unknown']),
+  contentLength: z.number().min(0).nullable(),
+  contentType: z.string().min(1).nullable(),
+  checkedAt: z.iso.datetime(),
+  error: z.string().min(1).nullable()
+});
+
+export type AdminStorageObjectState = z.infer<typeof adminStorageObjectStateSchema>;
+
+export const adminFileDownloadActivitySchema = z.object({
+  total: z.int().min(0),
+  recent: z.array(adminDownloadEventSummarySchema)
+});
+
+export type AdminFileDownloadActivity = z.infer<typeof adminFileDownloadActivitySchema>;
+
+export const adminFileDetailSchema = adminFileSummarySchema.extend({
+  storageObject: adminStorageObjectStateSchema,
+  downloadActivity: adminFileDownloadActivitySchema,
+  reports: z.array(adminReportSummarySchema),
+  moderationHistory: z.array(adminModerationActionSummarySchema)
+});
+
+export type AdminFileDetail = z.infer<typeof adminFileDetailSchema>;
+
+export const adminFileDetailResponseSchema = z.object({
+  file: adminFileDetailSchema
+});
+
+export type AdminFileDetailResponse = z.infer<typeof adminFileDetailResponseSchema>;
