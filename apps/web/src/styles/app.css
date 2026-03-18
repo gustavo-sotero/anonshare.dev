@@ -1331,6 +1331,62 @@ code {
   color: var(--muted);
 }
 
+.about-note-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.about-note-grid--compact {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.about-note-card {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(163, 193, 173, 0.14);
+  background: rgba(9, 19, 30, 0.72);
+}
+
+.about-note-card--signal {
+  border-color: rgba(200, 255, 135, 0.18);
+}
+
+.about-note-card--warning {
+  border-color: rgba(255, 211, 122, 0.18);
+}
+
+.about-note-card__eyebrow {
+  color: var(--accent);
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.about-note-card--warning .about-note-card__eyebrow {
+  color: var(--warning);
+}
+
+.about-note-card__title {
+  font-size: 0.98rem;
+}
+
+.about-note-card__body,
+.about-note-card__aside {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.58;
+}
+
+.about-note-card__aside {
+  padding-top: 10px;
+  border-top: 1px solid rgba(163, 193, 173, 0.12);
+}
+
 /* ── System flow ─────────────────────────────────────────────────── */
 
 .about-flow {
@@ -1583,6 +1639,21 @@ code {
   line-height: 1.5;
 }
 
+.about-next-card__impact {
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid rgba(163, 193, 173, 0.12);
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.52;
+}
+
+.about-next-card__impact-label {
+  color: var(--accent);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
 /* ── Table of contents (rail) ────────────────────────────────────── */
 
 .about-toc {
@@ -1609,6 +1680,7 @@ code {
 /* ── About page responsive ───────────────────────────────────────── */
 
 @media (max-width: 980px) {
+  .about-note-grid,
   .about-arch-grid,
   .about-stack-grid,
   .about-next-grid {
