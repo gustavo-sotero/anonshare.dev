@@ -35,6 +35,7 @@ import {
   canHideFileStatus,
   getModerationConfirmationMessage
 } from '~/admin/dashboard';
+import { runTrackedRequest, useRequestTracker } from '~/admin/request-tracker';
 import { SiteFrame } from '~/components/site-frame';
 
 export const Route = createFileRoute('/admin')({
@@ -118,11 +119,11 @@ function extractErrorMessage(body: unknown, fallback: string): string {
   return fallback;
 }
 
-async function fetchAdminJson(url: string, signal: AbortSignal): Promise<unknown> {
+async function fetchAdminJson(url: string, signal?: AbortSignal): Promise<unknown> {
   const response = await fetch(url, {
     headers: { accept: 'application/json' },
     credentials: 'same-origin',
-    signal
+    signal: signal ?? null
   });
   const body = await parseJsonBody(response);
 
@@ -162,28 +163,28 @@ async function postAdminJson(
   return { ok: response.ok, body, status: response.status };
 }
 
-async function fetchAdminSession(signal: AbortSignal): Promise<AdminSessionResponse> {
+async function fetchAdminSession(signal?: AbortSignal): Promise<AdminSessionResponse> {
   const body = await fetchAdminJson('/api/admin/session', signal);
   const parsed = adminSessionResponseSchema.safeParse(body);
   if (!parsed.success) throw new Error('Admin session response validation failed.');
   return parsed.data;
 }
 
-async function fetchAdminStats(signal: AbortSignal): Promise<AdminLifecycleStatsResponse> {
+async function fetchAdminStats(signal?: AbortSignal): Promise<AdminLifecycleStatsResponse> {
   const body = await fetchAdminJson('/api/admin/stats', signal);
   const parsed = adminLifecycleStatsResponseSchema.safeParse(body);
   if (!parsed.success) throw new Error('Admin stats response validation failed.');
   return parsed.data;
 }
 
-async function fetchAdminOverview(signal: AbortSignal): Promise<AdminOverviewResponse> {
+async function fetchAdminOverview(signal?: AbortSignal): Promise<AdminOverviewResponse> {
   const body = await fetchAdminJson('/api/admin/overview', signal);
   const parsed = adminOverviewResponseSchema.safeParse(body);
   if (!parsed.success) throw new Error('Admin overview response validation failed.');
   return parsed.data;
 }
 
-async function fetchAdminAnomalies(signal: AbortSignal): Promise<AdminAnomaliesResponse> {
+async function fetchAdminAnomalies(signal?: AbortSignal): Promise<AdminAnomaliesResponse> {
   const body = await fetchAdminJson('/api/admin/anomalies?limit=20', signal);
   const parsed = adminAnomaliesResponseSchema.safeParse(body);
   if (!parsed.success) throw new Error('Admin anomalies response validation failed.');
@@ -195,7 +196,7 @@ async function fetchAdminReports(
   page: number,
   reason: string | null,
   urgency: string | null,
-  signal: AbortSignal
+  signal?: AbortSignal
 ): Promise<AdminReportListResponse> {
   const params = new URLSearchParams({
     status,
@@ -217,7 +218,7 @@ async function fetchAdminFiles(
   uploadedWithinDays: number | null,
   minReportCount: number | null,
   page: number,
-  signal: AbortSignal
+  signal?: AbortSignal
 ): Promise<AdminFileListResponse> {
   const params = new URLSearchParams({ page: String(page), pageSize: String(FILE_PAGE_SIZE) });
   if (status) params.set('status', status);
@@ -233,7 +234,7 @@ async function fetchAdminFiles(
 
 async function fetchAdminFileDetail(
   fileId: string,
-  signal: AbortSignal
+  signal?: AbortSignal
 ): Promise<AdminFileDetailResponse> {
   const body = await fetchAdminJson(`/api/admin/files/${encodeURIComponent(fileId)}`, signal);
   const parsed = adminFileDetailResponseSchema.safeParse(body);
@@ -244,7 +245,7 @@ async function fetchAdminFileDetail(
 async function fetchAdminDownloads(
   fileId: string | null,
   page: number,
-  signal: AbortSignal
+  signal?: AbortSignal
 ): Promise<AdminDownloadListResponse> {
   const params = new URLSearchParams({
     page: String(page),
@@ -257,7 +258,7 @@ async function fetchAdminDownloads(
   return parsed.data;
 }
 
-async function loadDashboardState(signal: AbortSignal): Promise<DashboardState> {
+async function loadDashboardState(signal?: AbortSignal): Promise<DashboardState> {
   const sessionResponse = await fetchAdminSession(signal);
 
   if (!sessionResponse.authenticated || !sessionResponse.session) {
@@ -598,6 +599,7 @@ function FilesTab({
   onModerate: (fileId: string, action: 'hide' | 'restore' | 'delete') => Promise<void>;
   onAccessLost: OnAdminAccessLost;
 }) {
+  const requestTracker = useRequestTracker();
   const [files, setFiles] = useState<AdminFileSummary[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -614,37 +616,46 @@ function FilesTab({
   const [error, setError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
 
-  const loadFiles = useCallback(() => {
-    const controller = new AbortController();
+  const loadFiles = useCallback(async () => {
     setIsLoading(true);
     setError(null);
-    fetchAdminFiles(
-      statusFilter || null,
-      policyFilter || null,
-      sortBy,
-      uploadedWithinDays,
-      minReportCount,
-      page,
-      controller.signal
-    )
-      .then((res) => {
+    await runTrackedRequest({
+      tracker: requestTracker,
+      run: () =>
+        fetchAdminFiles(
+          statusFilter || null,
+          policyFilter || null,
+          sortBy,
+          uploadedWithinDays,
+          minReportCount,
+          page
+        ),
+      onSuccess: (res) => {
         setFiles(res.files);
         setTotal(res.total);
-      })
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
+      },
+      onError: (err: unknown) => {
         if (err instanceof AdminAccessError) {
           onAccessLost(err);
           return;
         }
         setError(err instanceof Error ? err.message : 'Failed to load files.');
-      })
-      .finally(() => setIsLoading(false));
-    return () => controller.abort();
-  }, [minReportCount, onAccessLost, page, policyFilter, sortBy, statusFilter, uploadedWithinDays]);
+      },
+      onFinally: () => setIsLoading(false)
+    });
+  }, [
+    minReportCount,
+    onAccessLost,
+    page,
+    policyFilter,
+    requestTracker,
+    sortBy,
+    statusFilter,
+    uploadedWithinDays
+  ]);
 
   useEffect(() => {
-    return loadFiles();
+    void loadFiles();
   }, [loadFiles]);
 
   const handleModerate = async (
@@ -659,7 +670,7 @@ function FilesTab({
     setPendingAction(fileId);
     try {
       await onModerate(fileId, action);
-      loadFiles();
+      void loadFiles();
     } catch (err: unknown) {
       if (err instanceof AdminAccessError) {
         onAccessLost(err);
@@ -891,6 +902,7 @@ function ReportsTab({
   onModerateFile: (fileId: string, action: 'hide' | 'restore' | 'delete') => Promise<void>;
   onAccessLost: OnAdminAccessLost;
 }) {
+  const requestTracker = useRequestTracker();
   const [reports, setReports] = useState<AdminReportSummary[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -903,35 +915,29 @@ function ReportsTab({
   const [error, setError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
 
-  const loadReports = useCallback(() => {
-    const controller = new AbortController();
+  const loadReports = useCallback(async () => {
     setIsLoading(true);
     setError(null);
-    fetchAdminReports(
-      statusFilter,
-      page,
-      reasonFilter || null,
-      urgencyFilter || null,
-      controller.signal
-    )
-      .then((res) => {
+    await runTrackedRequest({
+      tracker: requestTracker,
+      run: () => fetchAdminReports(statusFilter, page, reasonFilter || null, urgencyFilter || null),
+      onSuccess: (res) => {
         setReports(res.reports);
         setTotal(res.total);
-      })
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
+      },
+      onError: (err: unknown) => {
         if (err instanceof AdminAccessError) {
           onAccessLost(err);
           return;
         }
         setError(err instanceof Error ? err.message : 'Failed to load reports.');
-      })
-      .finally(() => setIsLoading(false));
-    return () => controller.abort();
-  }, [onAccessLost, page, reasonFilter, statusFilter, urgencyFilter]);
+      },
+      onFinally: () => setIsLoading(false)
+    });
+  }, [onAccessLost, page, reasonFilter, requestTracker, statusFilter, urgencyFilter]);
 
   useEffect(() => {
-    return loadReports();
+    void loadReports();
   }, [loadReports]);
 
   const resolveReport = async (reportId: string, action: 'resolved' | 'dismissed') => {
@@ -944,7 +950,7 @@ function ReportsTab({
       if (!result.ok) {
         throw new Error(extractErrorMessage(result.body, 'Failed to resolve report.'));
       }
-      loadReports();
+      void loadReports();
     } catch (err: unknown) {
       if (err instanceof AdminAccessError) {
         onAccessLost(err);
@@ -964,7 +970,7 @@ function ReportsTab({
     setPendingAction(fileId);
     try {
       await onModerateFile(fileId, action);
-      loadReports();
+      void loadReports();
     } catch (err: unknown) {
       if (err instanceof AdminAccessError) {
         onAccessLost(err);
@@ -1148,6 +1154,7 @@ function DownloadsTab({
   onInspect: (fileId: string) => void;
   onAccessLost: OnAdminAccessLost;
 }) {
+  const requestTracker = useRequestTracker();
   const [downloads, setDownloads] = useState<AdminDownloadListResponse['downloads']>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -1156,25 +1163,25 @@ function DownloadsTab({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const controller = new AbortController();
     setIsLoading(true);
     setError(null);
-    fetchAdminDownloads(fileIdFilter || null, page, controller.signal)
-      .then((res) => {
+    void runTrackedRequest({
+      tracker: requestTracker,
+      run: () => fetchAdminDownloads(fileIdFilter || null, page),
+      onSuccess: (res) => {
         setDownloads(res.downloads);
         setTotal(res.total);
-      })
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
+      },
+      onError: (err: unknown) => {
         if (err instanceof AdminAccessError) {
           onAccessLost(err);
           return;
         }
         setError(err instanceof Error ? err.message : 'Failed to load downloads.');
-      })
-      .finally(() => setIsLoading(false));
-    return () => controller.abort();
-  }, [fileIdFilter, onAccessLost, page]);
+      },
+      onFinally: () => setIsLoading(false)
+    });
+  }, [fileIdFilter, onAccessLost, page, requestTracker]);
 
   const totalPages = Math.ceil(total / DOWNLOAD_PAGE_SIZE);
 
@@ -1284,6 +1291,7 @@ function StorageTab({
   onInspect: (fileId: string) => void;
   onAccessLost: OnAdminAccessLost;
 }) {
+  const requestTracker = useRequestTracker();
   const [files, setFiles] = useState<AdminFileSummary[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -1291,25 +1299,25 @@ function StorageTab({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const controller = new AbortController();
     setIsLoading(true);
     setError(null);
-    fetchAdminFiles(null, null, 'sizeBytes_desc', null, null, page, controller.signal)
-      .then((res) => {
+    void runTrackedRequest({
+      tracker: requestTracker,
+      run: () => fetchAdminFiles(null, null, 'sizeBytes_desc', null, null, page),
+      onSuccess: (res) => {
         setFiles(res.files);
         setTotal(res.total);
-      })
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
+      },
+      onError: (err: unknown) => {
         if (err instanceof AdminAccessError) {
           onAccessLost(err);
           return;
         }
         setError(err instanceof Error ? err.message : 'Failed to load storage view.');
-      })
-      .finally(() => setIsLoading(false));
-    return () => controller.abort();
-  }, [onAccessLost, page]);
+      },
+      onFinally: () => setIsLoading(false)
+    });
+  }, [onAccessLost, page, requestTracker]);
 
   const highlights = buildStorageHighlights(data.overview, files);
   const totalPages = Math.ceil(total / FILE_PAGE_SIZE);
@@ -1520,31 +1528,32 @@ function FileInspection({
   onModerate: (fileId: string, action: 'hide' | 'restore' | 'delete') => Promise<void>;
   onAccessLost: OnAdminAccessLost;
 }) {
+  const requestTracker = useRequestTracker();
   const [detail, setDetail] = useState<AdminFileDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
 
-  const loadDetail = useCallback(() => {
-    const controller = new AbortController();
+  const loadDetail = useCallback(async () => {
     setIsLoading(true);
     setError(null);
-    fetchAdminFileDetail(fileId, controller.signal)
-      .then((res) => setDetail(res.file))
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
+    await runTrackedRequest({
+      tracker: requestTracker,
+      run: () => fetchAdminFileDetail(fileId),
+      onSuccess: (res) => setDetail(res.file),
+      onError: (err: unknown) => {
         if (err instanceof AdminAccessError) {
           onAccessLost(err);
           return;
         }
         setError(err instanceof Error ? err.message : 'Failed to load file detail.');
-      })
-      .finally(() => setIsLoading(false));
-    return () => controller.abort();
-  }, [fileId, onAccessLost]);
+      },
+      onFinally: () => setIsLoading(false)
+    });
+  }, [fileId, onAccessLost, requestTracker]);
 
   useEffect(() => {
-    return loadDetail();
+    void loadDetail();
   }, [loadDetail]);
 
   const handleModerate = async (action: 'hide' | 'restore' | 'delete') => {
@@ -1555,7 +1564,7 @@ function FileInspection({
     setPendingAction(action);
     try {
       await onModerate(fileId, action);
-      loadDetail();
+      void loadDetail();
     } catch (err: unknown) {
       if (err instanceof AdminAccessError) {
         onAccessLost(err);
@@ -1923,6 +1932,7 @@ function AdminRail({ state, onLogout }: { state: DashboardState; onLogout: () =>
 // ─── Main Page Component ─────────────────────────────────────────────────────
 
 function AdminPage() {
+  const requestTracker = useRequestTracker();
   const [state, setState] = useState<DashboardState>({ kind: 'loading' });
   const [refreshKey, setRefreshKey] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -1957,18 +1967,17 @@ function AdminPage() {
   }, []);
 
   useEffect(() => {
-    const controller = new AbortController();
-
     if (refreshKey === 0) {
       setState({ kind: 'loading' });
     } else {
       setIsRefreshing(true);
     }
 
-    loadDashboardState(controller.signal)
-      .then((nextState) => setState(nextState))
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) return;
+    void runTrackedRequest({
+      tracker: requestTracker,
+      run: () => loadDashboardState(),
+      onSuccess: (nextState) => setState(nextState),
+      onError: (error: unknown) => {
         if (error instanceof AdminAccessError) {
           handleAccessLost(error);
           return;
@@ -1977,20 +1986,17 @@ function AdminPage() {
           kind: 'error',
           message: error instanceof Error ? error.message : 'Failed to load dashboard.'
         });
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setIsRefreshing(false);
-      });
-
-    return () => controller.abort();
-  }, [handleAccessLost, refreshKey]);
+      },
+      onFinally: () => setIsRefreshing(false)
+    });
+  }, [handleAccessLost, refreshKey, requestTracker]);
 
   const refresh = () => setRefreshKey((k) => k + 1);
 
   const handleLogin = async () => {
     try {
       setLoginError(null);
-      const body = await fetchAdminJson('/api/admin/auth/login', new AbortController().signal);
+      const body = await fetchAdminJson('/api/admin/auth/login');
       const result = body as { authorizationUrl: string };
       if (result.authorizationUrl) {
         window.location.href = result.authorizationUrl;
