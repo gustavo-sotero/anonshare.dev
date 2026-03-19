@@ -3,13 +3,13 @@ import { MAX_FILE_SIZE_BYTES } from '@anonshare/domain';
 import { app as appConfig, loadSystemSettingOrDefault } from '@anonshare/infrastructure/config';
 import { createDb } from '@anonshare/infrastructure/db';
 import { files } from '@anonshare/infrastructure/db/schema';
-import { logger } from '@anonshare/infrastructure/logger';
 import { checkRateLimit, recordRateLimitBlocked } from '@anonshare/infrastructure/rate-limit';
 import type { Redis } from '@anonshare/infrastructure/redis';
 import { getRedisClient } from '@anonshare/infrastructure/redis';
 import { StorageError, storageAdapter } from '@anonshare/infrastructure/storage';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { logger } from '../logger';
 import { enqueueCleanupFileJob, enqueueExpireFileJob } from '../queues';
 
 // ─── Rate limiting ────────────────────────────────────────────────────────────
@@ -348,7 +348,7 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
     const expiresAt = metadata.expiresAt ? new Date(metadata.expiresAt) : null;
 
     logger.info('Upload started', {
-      event: 'upload_created',
+      event: 'upload.created',
       requestId,
       actor: 'anonymous',
       entity: { type: 'file', id: token },

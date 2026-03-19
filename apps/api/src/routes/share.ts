@@ -12,7 +12,6 @@ import {
 import { loadSystemSettingOrDefault } from '@anonshare/infrastructure/config';
 import { createDb } from '@anonshare/infrastructure/db';
 import { downloadEvents, files } from '@anonshare/infrastructure/db/schema';
-import { logger } from '@anonshare/infrastructure/logger';
 import { checkRateLimit, recordRateLimitBlocked } from '@anonshare/infrastructure/rate-limit';
 import type { Redis } from '@anonshare/infrastructure/redis';
 import { getRedisClient } from '@anonshare/infrastructure/redis';
@@ -20,6 +19,7 @@ import type { StorageSignedUrlOptions } from '@anonshare/infrastructure/storage'
 import { StorageError, storageAdapter } from '@anonshare/infrastructure/storage';
 import { and, eq, inArray } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { logger } from '../logger';
 import { enqueueCleanupFileJob } from '../queues';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -128,6 +128,12 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
     (() => loadSystemSettingOrDefault(resolveDb(), 'downloadRateLimitPerMinute'));
 
   const router = new Hono();
+
+  // ── Security: prevent search engine indexing of share endpoints ────────────
+  router.use('*', async (c, next) => {
+    c.header('x-robots-tag', 'noindex, nofollow');
+    await next();
+  });
 
   // ── GET /:token ─────────────────────────────────────────────────────────────
   // Returns file metadata for display on the public share page.
@@ -490,7 +496,7 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
       };
 
       logger.info('One-time download reserved', {
-        event: 'download_started',
+        event: 'download.started',
         requestId,
         actor: 'anonymous',
         entity: { type: 'file', id: token },
@@ -499,7 +505,7 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
       });
     } else {
       logger.info('Download started', {
-        event: 'download_started',
+        event: 'download.started',
         requestId,
         actor: 'anonymous',
         entity: { type: 'file', id: token },
@@ -594,7 +600,7 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
       .catch(() => {});
 
     logger.info('Download delivered via presigned URL', {
-      event: 'download_completed',
+      event: 'download.completed',
       requestId,
       actor: 'anonymous',
       entity: { type: 'file', id: token },
@@ -612,7 +618,7 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
         );
       } catch (err) {
         logger.warn('One-time cleanup enqueue failed; reconciler will repair', {
-          event: 'download_completed',
+          event: 'download.completed',
           requestId,
           actor: 'anonymous',
           entity: { type: 'file', id: token },

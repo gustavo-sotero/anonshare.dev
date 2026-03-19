@@ -7,9 +7,13 @@ export const Route = createRootRoute({
     meta: [
       { charSet: 'utf-8' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-      { title: 'anonshare — anonymous file sharing' }
+      { title: 'anonshare — anonymous file sharing' },
+      { name: 'referrer', content: 'strict-origin-when-cross-origin' }
     ],
-    links: [{ rel: 'stylesheet', href: appCss }]
+    links: [
+      { rel: 'stylesheet', href: appCss },
+      { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' }
+    ]
   }),
   component: RootComponent
 });

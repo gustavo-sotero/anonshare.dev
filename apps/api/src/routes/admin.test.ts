@@ -404,6 +404,60 @@ describe('GET /admin/anomalies', () => {
     expect(body.anomalies[0].severity).toBe('high');
     expect(body.anomalies[1].severity).toBe('low');
   });
+
+  test('normalizes stringified anomaly details before returning the response', async () => {
+    const app = buildApp({
+      findSessionById: async () => makeSession({ id: 'session-1' }),
+      getAllowedGithubUserId: () => '123456',
+      listAnomalies: async () => [
+        {
+          id: '00000000-0000-4000-8000-000000000012',
+          type: 'lifecycle_job_overdue',
+          fileId: null,
+          details: JSON.stringify({
+            severity: 'low',
+            queue: 'reconcile',
+            overdueMs: 10_000
+          }),
+          detectedAt: new Date('2026-03-12T12:30:00Z'),
+          resolvedAt: null,
+          resolution: null
+        }
+      ],
+      listOpenAnomalyCounts: async () => [],
+      listReportStatusCounts: async () => [],
+      listReportCountsByDay: async () => [],
+      listAutoHiddenCountsByDay: async () => [],
+      listResolvedReportCountsByDay: async () => [],
+      listDismissedReportCountsByDay: async () => [],
+      getQueues: () => [],
+      now: () => new Date('2026-03-12T13:00:00Z')
+    });
+
+    const response = await request(app, '/admin/anomalies?limit=1', {
+      'x-admin-session-id': 'session-1'
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(adminAnomaliesResponseSchema.safeParse(body).success).toBe(true);
+    expect(body.anomalies).toEqual([
+      {
+        id: '00000000-0000-4000-8000-000000000012',
+        type: 'lifecycle_job_overdue',
+        severity: 'low',
+        fileId: null,
+        details: {
+          severity: 'low',
+          queue: 'reconcile',
+          overdueMs: 10_000
+        },
+        detectedAt: '2026-03-12T12:30:00.000Z',
+        resolvedAt: null,
+        resolution: null
+      }
+    ]);
+  });
 });
 
 // ── Admin DB mock helpers ─────────────────────────────────────────────────────
@@ -881,6 +935,46 @@ describe('POST /admin/files/:id/moderate', () => {
     expect(action.nextStatus).toBe('hidden');
   });
 
+  test('logs manual moderation with api service context and trigger metadata', async () => {
+    const file = makeAdminFile({ status: 'active' });
+    const db = makeAdminDb({ fileLookup: file });
+    const app = buildApp(makeAuthDeps(db));
+    const originalLog = console.log;
+    const entries: Array<Record<string, unknown>> = [];
+
+    console.log = (...args: unknown[]) => {
+      const line = args[0];
+
+      if (typeof line !== 'string') {
+        return;
+      }
+
+      try {
+        entries.push(JSON.parse(line) as Record<string, unknown>);
+      } catch {}
+    };
+
+    try {
+      const response = await jsonPost(
+        app,
+        `/admin/files/${file.id}/moderate`,
+        { action: 'hide', reason: 'Manual hide' },
+        { 'x-admin-session-id': 'session-1' }
+      );
+
+      expect(response.status).toBe(200);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const hiddenLog = entries.find((entry) => entry.event === 'file.hidden');
+
+    expect(hiddenLog).toBeDefined();
+    expect(hiddenLog?.service).toBe('api');
+    expect(hiddenLog?.trigger).toBe('manual');
+    expect(hiddenLog?.requestId).toBeTruthy();
+  });
+
   test('returns 409 when trying to hide an already-hidden file', async () => {
     const file = makeAdminFile({ status: 'hidden' });
     const db = makeAdminDb({ fileLookup: file });
@@ -1059,6 +1153,48 @@ describe('POST /admin/files/:id/moderate', () => {
     expect(cleanupEnqueued).toHaveLength(1);
     expect(cleanupEnqueued[0]?.fileId).toBe(file.id);
     expect(cleanupEnqueued[0]?.objectKey).toBe(file.objectKey);
+  });
+
+  test('logs file.deleted with api service context and manual trigger metadata', async () => {
+    const file = makeAdminFile({ status: 'active' });
+    const db = makeAdminDb({ fileLookup: file });
+    const app = buildApp(makeAuthDeps(db));
+    const originalLog = console.log;
+    const entries: Array<Record<string, unknown>> = [];
+
+    console.log = (...args: unknown[]) => {
+      const line = args[0];
+
+      if (typeof line !== 'string') {
+        return;
+      }
+
+      try {
+        entries.push(JSON.parse(line) as Record<string, unknown>);
+      } catch {}
+    };
+
+    try {
+      const response = await jsonPost(
+        app,
+        `/admin/files/${file.id}/moderate`,
+        { action: 'delete' },
+        { 'x-admin-session-id': 'session-1' }
+      );
+
+      expect(response.status).toBe(200);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const deletedLog = entries.find((entry) => entry.event === 'file.deleted');
+
+    expect(deletedLog).toBeDefined();
+    expect(deletedLog?.service).toBe('api');
+    expect(deletedLog?.trigger).toBe('manual');
+    expect(deletedLog?.requestId).toBeTruthy();
+    expect(deletedLog?.entity).toEqual({ type: 'file', id: file.id });
+    expect(deletedLog?.outcome).toBe('success');
   });
 
   test('returns 409 when deleting an already-deleted file', async () => {

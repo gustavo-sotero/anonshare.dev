@@ -2,9 +2,9 @@ import { adminLoginCallbackSchema } from '@anonshare/contracts';
 import { app as appConfig, auth as authConfig } from '@anonshare/infrastructure/config';
 import { createDb } from '@anonshare/infrastructure/db';
 import { adminSessions } from '@anonshare/infrastructure/db/schema';
-import { logger } from '@anonshare/infrastructure/logger';
 import { eq } from 'drizzle-orm';
 import { type Context, Hono } from 'hono';
+import { logger } from '../logger';
 
 const ADMIN_SESSION_COOKIE_NAME = 'anonshare_admin_session';
 const SESSION_DURATION_MS = 24 * 60 * 60 * 1000; // 24 hours

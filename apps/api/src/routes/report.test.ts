@@ -557,6 +557,44 @@ describe('POST /report/:token — auto-hide', () => {
     expect(res.status).toBe(500);
   });
 
+  test('logs automatic hides with api service context and trigger metadata', async () => {
+    const db = makeDb({
+      file: makeFile({ reportCount: 2 }),
+      threshold: 3,
+      newReportCount: 3,
+      reportId: 'rpt-auto-hide'
+    });
+    const app = buildApp(makeDepsNoRl(db));
+    const originalLog = console.log;
+    const entries: Array<Record<string, unknown>> = [];
+
+    console.log = (...args: unknown[]) => {
+      const line = args[0];
+
+      if (typeof line !== 'string') {
+        return;
+      }
+
+      try {
+        entries.push(JSON.parse(line) as Record<string, unknown>);
+      } catch {}
+    };
+
+    try {
+      const res = await post(app, VALID_TOKEN, { reason: 'spam' });
+      expect(res.status).toBe(200);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const hiddenLog = entries.find((entry) => entry.event === 'file.hidden');
+
+    expect(hiddenLog).toBeDefined();
+    expect(hiddenLog?.service).toBe('api');
+    expect(hiddenLog?.trigger).toBe('automatic');
+    expect(hiddenLog?.requestId).toBeTruthy();
+  });
+
   test('uses default threshold when settings row is not found', async () => {
     const capturedAutoHideValues: unknown[] = [];
     const db = makeDb({

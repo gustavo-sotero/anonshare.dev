@@ -15,7 +15,7 @@ export {
   checkStorageHealth,
   evaluatePlatformHealth
 } from './health/index';
-export type { LogContext } from './logger/index';
+export type { LogContext, Logger } from './logger/index';
 export { logger } from './logger/index';
 export type { DailyRateLimitBlockedCount, RateLimitResult } from './rate-limit/index';
 export {

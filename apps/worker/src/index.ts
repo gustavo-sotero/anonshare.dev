@@ -5,7 +5,6 @@ import type {
 } from '@anonshare/contracts';
 import { validateWorkerEnv } from '@anonshare/infrastructure/config';
 import { createDb } from '@anonshare/infrastructure/db';
-import { logger } from '@anonshare/infrastructure/logger';
 import { closeRedisClient } from '@anonshare/infrastructure/redis';
 import { storageAdapter } from '@anonshare/infrastructure/storage';
 import { Queue, Worker } from 'bullmq';
@@ -13,27 +12,25 @@ import { registerReconcileScheduler } from './bootstrap/register-reconcile-sched
 import { makeHandleCleanupFile } from './handlers/cleanup-file';
 import { makeHandleExpireFile } from './handlers/expire-file';
 import { makeHandleReconcile } from './handlers/reconcile';
+import { startWorkerHealthServer } from './health-server';
+import { logger } from './logger';
 import { QUEUE_CLEANUP_FILE, QUEUE_EXPIRE_FILE, QUEUE_RECONCILE } from './queues';
-
-function getJobLagMs(job: { timestamp?: number; delay?: number; processedOn?: number }): number {
-  const scheduledAt = (job.timestamp ?? Date.now()) + (job.delay ?? 0);
-  const processedAt = job.processedOn ?? Date.now();
-  return Math.max(0, processedAt - scheduledAt);
-}
-
-function getJobDurationMs(job: { processedOn?: number; finishedOn?: number }): number | null {
-  if (typeof job.processedOn !== 'number' || typeof job.finishedOn !== 'number') {
-    return null;
-  }
-
-  return Math.max(0, job.finishedOn - job.processedOn);
-}
+import { buildWorkerJobLogContext, buildWorkerLifecycleLog } from './runtime-events';
 
 // ─── Boot ────────────────────────────────────────────────────────────────────
 
-logger.info('Worker starting', { actor: 'worker', event: 'worker_start', outcome: 'success' });
+logger.info('Worker starting', buildWorkerLifecycleLog('worker_start'));
 
 const config = validateWorkerEnv();
+const runtimeHealthState = {
+  queueNames: [QUEUE_EXPIRE_FILE, QUEUE_CLEANUP_FILE, QUEUE_RECONCILE],
+  ready: false,
+  shuttingDown: false
+};
+const healthServer = startWorkerHealthServer({
+  getState: () => runtimeHealthState,
+  port: config.healthPort
+});
 
 // Pass the URL directly so BullMQ creates its own ioredis connection,
 // avoiding version-mismatch conflicts with the infrastructure package's client.
@@ -80,48 +77,37 @@ await Promise.all([
 // ─── Recurring reconciliation scheduler ──────────────────────────────────────
 
 await registerReconcileScheduler(reconcileQueue);
+runtimeHealthState.ready = true;
 
 // ─── Error logging ────────────────────────────────────────────────────────────
 
 for (const worker of [expireWorker, cleanupWorker, reconcileWorker]) {
   worker.on('completed', (job) => {
-    logger.info('Job completed', {
-      actor: 'worker',
-      event: 'job_completed',
-      ...(job ? { entity: { type: 'job', id: job.id ?? 'unknown' } } : {}),
-      outcome: 'success',
-      queue: worker.name,
-      jobName: job?.name,
-      attemptsMade: job?.attemptsMade ?? 0,
-      lagMs: job ? getJobLagMs(job) : null,
-      durationMs: job ? getJobDurationMs(job) : null
-    });
+    logger.info(
+      'Job completed',
+      buildWorkerJobLogContext({ event: 'job_completed', job, queue: worker.name })
+    );
   });
 
   worker.on('failed', (job, err) => {
-    logger.error('Job failed', {
-      actor: 'worker',
-      event: 'job_failed',
-      ...(job ? { entity: { type: 'job', id: job.id ?? 'unknown' } } : {}),
-      outcome: 'failure',
-      queue: worker.name,
-      jobName: job?.name,
-      attemptsMade: job?.attemptsMade ?? 0,
-      lagMs: job ? getJobLagMs(job) : null,
-      durationMs: job ? getJobDurationMs(job) : null,
-      error: String(err)
-    });
+    logger.error(
+      'Job failed',
+      buildWorkerJobLogContext({
+        error: String(err),
+        event: 'job_failed',
+        job,
+        queue: worker.name
+      })
+    );
   });
 }
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
 
 async function shutdown(): Promise<void> {
-  logger.info('Worker shutting down', {
-    actor: 'worker',
-    event: 'worker_shutdown',
-    outcome: 'success'
-  });
+  runtimeHealthState.ready = false;
+  runtimeHealthState.shuttingDown = true;
+  logger.info('Worker shutting down', buildWorkerLifecycleLog('worker_shutdown'));
   await Promise.all([
     expireWorker.close(),
     cleanupWorker.close(),
@@ -130,6 +116,7 @@ async function shutdown(): Promise<void> {
     cleanupQueue.close(),
     reconcileQueue.close()
   ]);
+  healthServer.stop(true);
   await closeRedisClient();
   process.exit(0);
 }
@@ -137,4 +124,4 @@ async function shutdown(): Promise<void> {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-logger.info('Worker ready', { actor: 'worker', event: 'worker_ready', outcome: 'success' });
+logger.info('Worker ready', buildWorkerLifecycleLog('worker_ready'));

@@ -2,12 +2,12 @@ import { API_ERROR_CODES, reportRequestSchema, shareTokenParamsSchema } from '@a
 import { loadSystemSettingOrDefault } from '@anonshare/infrastructure/config';
 import { createDb } from '@anonshare/infrastructure/db';
 import { fileModerationActions, files, reports } from '@anonshare/infrastructure/db/schema';
-import { logger } from '@anonshare/infrastructure/logger';
 import { checkRateLimit, recordRateLimitBlocked } from '@anonshare/infrastructure/rate-limit';
 import type { Redis } from '@anonshare/infrastructure/redis';
 import { getRedisClient } from '@anonshare/infrastructure/redis';
 import { and, eq, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { logger } from '../logger';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const REPORT_RATE_WINDOW_SECONDS = 3600;
@@ -277,12 +277,12 @@ export function createReportRouter(deps: ReportRouterDeps = {}): Hono {
 
     if (autoHidden) {
       logger.info('File auto-hidden', {
-        event: 'file.auto_hidden',
+        event: 'file.hidden',
         requestId,
         actor: 'system',
         entity: { type: 'file', id: file.id },
         outcome: 'success',
-        trigger: 'auto_hide',
+        trigger: 'automatic',
         reportCount: newReportCount
       });
     }

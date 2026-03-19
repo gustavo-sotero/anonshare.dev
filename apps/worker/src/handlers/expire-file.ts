@@ -5,9 +5,9 @@ import {
 } from '@anonshare/contracts';
 import type { createDb } from '@anonshare/infrastructure/db';
 import { files } from '@anonshare/infrastructure/db/schema';
-import { logger } from '@anonshare/infrastructure/logger';
 import type { Job, Queue } from 'bullmq';
 import { and, eq, inArray } from 'drizzle-orm';
+import { logger } from '../logger';
 
 export type ExpireFileHandlerDeps = {
   db: ReturnType<typeof createDb>;

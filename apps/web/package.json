@@ -3,9 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun run ./scripts/vite.ts dev",
-    "build": "bun run ./scripts/vite.ts build",
-    "start": "bun --env-file=.env ./scripts/start.ts",
+    "dev": "bun --env-file=../../.env run ./scripts/vite.ts dev",
+    "build": "bun --env-file=../../.env run ./scripts/vite.ts build",
+    "start": "bun --env-file=../../.env ./scripts/start.ts",
+    "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

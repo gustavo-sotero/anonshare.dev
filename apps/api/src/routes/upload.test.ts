@@ -378,6 +378,43 @@ describe('POST /upload — successful upload lifecycle', () => {
     expect(response.status).toBe(201);
   });
 
+  test('emits upload.created with request correlation and api service context', async () => {
+    const app = buildApp(makeMockDeps());
+    const originalLog = console.log;
+    const entries: Array<Record<string, unknown>> = [];
+
+    console.log = (...args: unknown[]) => {
+      const line = args[0];
+
+      if (typeof line !== 'string') {
+        return;
+      }
+
+      try {
+        entries.push(JSON.parse(line) as Record<string, unknown>);
+      } catch {}
+    };
+
+    try {
+      const response = await postUpload(app, {
+        file: makeFile(),
+        oneTime: false,
+        allowPreview: false,
+        expiresAt: null
+      });
+
+      expect(response.status).toBe(201);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const uploadLog = entries.find((entry) => entry.event === 'upload.created');
+
+    expect(uploadLog).toBeDefined();
+    expect(uploadLog?.service).toBe('api');
+    expect(uploadLog?.requestId).toBeTruthy();
+  });
+
   test('promotes directly to expired and enqueues cleanup when expiration elapses during activation', async () => {
     const capturedUpdates: unknown[] = [];
     const capturedExpireEnqueues: Array<{ fileId: string; delayMs: number }> = [];

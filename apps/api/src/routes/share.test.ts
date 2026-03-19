@@ -427,6 +427,52 @@ describe('GET /share/:token/download — standard download', () => {
     expect(insertedEventTypes).toEqual(['started', 'completed']);
   });
 
+  test('emits download.started and download.completed with shared request correlation', async () => {
+    const app = buildApp(
+      makeMockDeps(
+        { findFirst: makeFileRow({ oneTimeDownload: false }) },
+        { signedUrl: 'https://storage.example.com/dl?token=xyz' }
+      )
+    );
+    const originalLog = console.log;
+    const entries: Array<Record<string, unknown>> = [];
+
+    console.log = (...args: unknown[]) => {
+      const line = args[0];
+
+      if (typeof line !== 'string') {
+        return;
+      }
+
+      try {
+        entries.push(JSON.parse(line) as Record<string, unknown>);
+      } catch {}
+    };
+
+    try {
+      const res = await request(app, '/share/Abc123defghijkl012/download');
+      expect(res.status).toBe(200);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const startedLog = entries.find((entry) => entry.event === 'download.started');
+    const completedLog = entries.find((entry) => entry.event === 'download.completed');
+
+    expect(startedLog).toBeDefined();
+    expect(completedLog).toBeDefined();
+    expect(startedLog?.service).toBe('api');
+    expect(completedLog?.service).toBe('api');
+    expect(startedLog?.requestId).toBeTruthy();
+    expect(completedLog?.requestId).toBe(startedLog?.requestId);
+    expect(startedLog?.entity).toEqual({ type: 'file', id: 'Abc123defghijkl012' });
+    expect(completedLog?.entity).toEqual({ type: 'file', id: 'Abc123defghijkl012' });
+    expect(startedLog?.outcome).toBe('success');
+    expect(completedLog?.outcome).toBe('success');
+    expect(startedLog?.oneTime).toBe(false);
+    expect(completedLog?.source).toBe('presign_issued');
+  });
+
   test('returns presigned URL for an active standard file', async () => {
     const app = buildApp(
       makeMockDeps(
@@ -1357,5 +1403,27 @@ describe('GET /share/:token/preview — rate limiting', () => {
     expect(incrKeys[0]?.startsWith('rl:preview:')).toBe(true);
     expect(incrKeys.some((key) => key.startsWith('rl:download:'))).toBe(false);
     expect(incrKeys.some((key) => key.startsWith('rl:share_token:'))).toBe(true);
+  });
+});
+
+describe('Share security headers', () => {
+  test('sets x-robots-tag: noindex, nofollow on metadata responses', async () => {
+    const app = buildApp(makeMockDeps({ findFirst: makeFileRow() }));
+    const res = await app.request('http://localhost/share/Abc123defghijkl012');
+    expect(res.headers.get('x-robots-tag')).toBe('noindex, nofollow');
+  });
+
+  test('sets x-robots-tag: noindex, nofollow on download responses', async () => {
+    const app = buildApp(
+      makeMockDeps({ findFirst: makeFileRow() }, { signedUrl: 'https://storage.example.com/dl' })
+    );
+    const res = await app.request('http://localhost/share/Abc123defghijkl012/download');
+    expect(res.headers.get('x-robots-tag')).toBe('noindex, nofollow');
+  });
+
+  test('sets x-robots-tag: noindex, nofollow on 404 responses', async () => {
+    const app = buildApp(makeMockDeps({ findFirst: null }));
+    const res = await app.request('http://localhost/share/Abc123defghijkl012');
+    expect(res.headers.get('x-robots-tag')).toBe('noindex, nofollow');
   });
 });

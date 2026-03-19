@@ -19,7 +19,7 @@ function require(key: string): string {
   if (!value) {
     throw new Error(
       `[config] Missing required environment variable: ${key}\n` +
-        `Copy the relevant .env.example and fill in the value.`
+        `Copy the root .env.example to .env and fill in the value.`
     );
   }
   return value;
@@ -199,6 +199,7 @@ export type ValidatedApiConfig = ValidatedProcessConfig & {
 export type ValidatedWorkerConfig = ValidatedProcessConfig & {
   appBaseUrl: string;
   databaseUrl: string;
+  healthPort: number;
   redisUrl: string;
   storageAccessKeyId: string;
   storageBucket: string;
@@ -245,6 +246,7 @@ export function validateWorkerEnv(): ValidatedWorkerConfig {
     ...validateSharedAppConfig(),
     appBaseUrl: requireHttpUrl('APP_BASE_URL'),
     databaseUrl: db.url(),
+    healthPort: optionalPort('WORKER_HEALTH_PORT', 3002),
     redisUrl: redis.url(),
     storageAccessKeyId: storage.accessKeyId(),
     storageBucket: storage.bucket(),

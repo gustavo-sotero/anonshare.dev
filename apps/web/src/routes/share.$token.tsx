@@ -23,22 +23,24 @@ type LoaderResult =
   | { ok: true; status: 200; data: FileMeta; errorCode: null }
   | { ok: false; status: number; data: null; errorCode: string; errorMessage: string };
 
+export function buildSharePageHead(loaderData?: LoaderResult) {
+  const title =
+    loaderData?.ok && loaderData.data?.filename
+      ? `${loaderData.data.filename} — anonshare`
+      : 'anonshare — file link';
+
+  return {
+    meta: [
+      { title },
+      // Share pages must never be indexed: they contain ephemeral content
+      // addressed by unguessable tokens and have short lifetimes.
+      { name: 'robots', content: 'noindex, nofollow' }
+    ]
+  };
+}
+
 export const Route = createFileRoute('/share/$token')({
-  head: ({ loaderData }) => {
-    // Cast required because TanStack Router types loaderData as the inferred
-    // loader return type, which may not be narrowed in the head context.
-    const ld = loaderData as LoaderResult | undefined;
-    const title =
-      ld?.ok && ld.data?.filename ? `${ld.data.filename} — anonshare` : 'anonshare — file link';
-    return {
-      meta: [
-        { title },
-        // Share pages must never be indexed: they contain ephemeral content
-        // addressed by unguessable tokens and have short lifetimes.
-        { name: 'robots', content: 'noindex, nofollow' }
-      ]
-    };
-  },
+  head: ({ loaderData }) => buildSharePageHead(loaderData as LoaderResult | undefined),
   loader: async ({ params }): Promise<LoaderResult> => {
     // Loader runs isomorphically — detect server vs browser context.
     // On the server during SSR, call the Hono API directly via env URL.

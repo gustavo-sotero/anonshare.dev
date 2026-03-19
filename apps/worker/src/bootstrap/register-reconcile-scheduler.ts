@@ -4,8 +4,8 @@ import {
   RECONCILE_JOB_BACKOFF_DELAY_MS,
   type ReconcileJobPayload
 } from '@anonshare/contracts';
-import { logger } from '@anonshare/infrastructure/logger';
 import type { Queue } from 'bullmq';
+import { logger } from '../logger';
 import { QUEUE_RECONCILE } from '../queues';
 
 const DEFAULT_INTERVAL_MS = 60 * 60 * 1_000;

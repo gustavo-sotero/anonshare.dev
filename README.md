@@ -87,21 +87,23 @@ If PostgreSQL authentication fails after changing root `.env` credentials, the e
 
 ### 2. Configure environment
 
+Use a single root environment file for all apps:
+
 ```sh
-cp apps/api/.env.example apps/api/.env
-cp apps/worker/.env.example apps/worker/.env
-cp apps/web/.env.example apps/web/.env
+cp .env.example .env
 ```
 
 PowerShell:
 
 ```powershell
-Copy-Item apps/api/.env.example apps/api/.env
-Copy-Item apps/worker/.env.example apps/worker/.env
-Copy-Item apps/web/.env.example apps/web/.env
+Copy-Item .env.example .env
 ```
 
-Fill in `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_ALLOWED_USER_ID` and `SESSION_SECRET` in `apps/api/.env`.
+Fill in `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_ALLOWED_USER_ID` and `SESSION_SECRET` in the root `.env`.
+
+All processes (`web`, `api`, `worker`) load variables from this same root `.env`.
+
+The per-app `.env.example` files are deprecated and kept only for compatibility.
 
 If `docker compose up -d` fails with a Docker named pipe error on Windows, start Docker Desktop first and rerun the command.
 
@@ -115,7 +117,13 @@ In Module 1 this command is intentionally a no-op because the application schema
 
 ### 4. Start all services
 
-Open three terminals:
+Run all app dev servers with one command:
+
+```sh
+bun run dev
+```
+
+Or open three terminals:
 
 ```sh
 bun run dev:api
@@ -137,7 +145,8 @@ bun run --cwd apps/web dev
 
 | Command | What it does |
 |---|---|
-| `bun run verify` | Typecheck + lint + tests + build (use before committing) |
+| `bun run dev` | Run all app dev servers in parallel from the workspace root |
+| `bun run verify` | Dependency check + typecheck + lint + tests + build + migration validation |
 | `bun run build` | Bundle the web, API, and worker entrypoints |
 | `bun run test` | Run foundational tests |
 | `bun run check` | Biome format + lint with auto-fix |
@@ -165,7 +174,7 @@ This destroys named Docker volumes. All uploaded files and schema data are lost.
 - `bun run infra:check` fails for PostgreSQL after changing `.env`: run `bun run infra:reset` so the persisted database volume is recreated with the current credentials.
 - `bun run infra:check` fails for Redis or MinIO: verify `docker compose ps` shows healthy services, confirm the configured ports are not already in use on the host, and confirm the configured bucket exists or rerun `bun run infra:reset`.
 - `http://localhost:3001/health` returns `503`: at least one dependency is unavailable to the API process. Use the JSON response to see which dependency is degraded before restarting the relevant service.
-- `bun run dev:web` exits immediately: confirm `apps/web/.env` exists and contains valid `APP_BASE_URL` and `APP_API_URL` values.
+- `bun run dev:web` exits immediately: confirm the root `.env` exists and contains valid `APP_BASE_URL` and `APP_API_URL` values.
 
 ---
 
@@ -173,7 +182,7 @@ This destroys named Docker volumes. All uploaded files and schema data are lost.
 
 - **Imports**: use package aliases (`@anonshare/domain`, `@anonshare/contracts`, etc.) — not deep relative paths.
 - **Packages vs Apps**: `packages/` are libraries with no runtime entry point. `apps/` are executable processes.
-- **Environment**: each process reads its own `.env`. Variables are validated at boot — missing required vars crash immediately with a clear message.
+- **Environment**: all processes read from the single root `.env`. Variables are validated at boot — missing required vars crash immediately with a clear message.
 - **Readiness**: `bun run infra:check` validates local dependencies before app startup, and the API `GET /health` route reuses the same shared health probes at runtime.
 - **Infrastructure config**: the root `.env` controls local PostgreSQL, Redis and MinIO credentials/ports used by Docker Compose.
 - **Database tooling**: root Drizzle commands derive local connection settings from the root `.env` so operational scripts and Docker Compose stay aligned.

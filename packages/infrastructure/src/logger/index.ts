@@ -5,10 +5,11 @@
  * All events carry a minimum set of fields for correlation:
  *   - timestamp (ISO-8601)
  *   - level
- *   - event  (snake_case event name, e.g. "upload_created")
+ *   - service  (process identifier: "api" | "worker" | "web")
+ *   - event  (stable machine-readable event id, e.g. "http_request_completed" or "upload.created")
  *   - message (human-readable description)
  *   - requestId (optional — set per-request by middleware)
- *   - actor (optional — "anonymous" | "admin" | "worker")
+ *   - actor (optional — "anonymous" | "admin" | "worker" | "system")
  *   - entity (optional — { type, id })
  *   - outcome (optional — "success" | "failure")
  *   - ...rest (additional context fields)
@@ -18,11 +19,21 @@ type Level = 'debug' | 'info' | 'warn' | 'error';
 
 type LogContext = {
   event?: string;
+  service?: string;
   requestId?: string;
   actor?: string;
   entity?: { type: string; id: string };
   outcome?: 'success' | 'failure';
   [key: string]: unknown;
+};
+
+type Logger = {
+  debug: (message: string, ctx?: LogContext) => void;
+  info: (message: string, ctx?: LogContext) => void;
+  warn: (message: string, ctx?: LogContext) => void;
+  error: (message: string, ctx?: LogContext) => void;
+  /** Create a child logger that merges `defaults` into every emitted entry. */
+  withContext: (defaults: LogContext) => Logger;
 };
 
 function isDev(): boolean {
@@ -37,13 +48,15 @@ function formatDev(level: Level, message: string, ctx: LogContext): string {
     error: '[\x1b[31mERROR\x1b[0m]'
   }[level];
 
-  const event = ctx.event ? ` \x1b[90m${ctx.event}\x1b[0m` : '';
+  const svc = ctx.service ? `\x1b[35m${ctx.service}\x1b[0m ` : '';
+  const event = ctx.event ? `\x1b[90m${ctx.event}\x1b[0m ` : '';
   const rest = { ...ctx };
   delete rest.event;
+  delete rest.service;
 
   const extra = Object.keys(rest).length > 0 ? ` ${JSON.stringify(rest)}` : '';
 
-  return `${prefix}${event} ${message}${extra}`;
+  return `${prefix} ${svc}${event}${message}${extra}`;
 }
 
 function emit(level: Level, message: string, ctx: LogContext = {}): void {
@@ -65,11 +78,21 @@ function emit(level: Level, message: string, ctx: LogContext = {}): void {
   }
 }
 
-export const logger = {
-  debug: (message: string, ctx?: LogContext) => emit('debug', message, ctx),
-  info: (message: string, ctx?: LogContext) => emit('info', message, ctx),
-  warn: (message: string, ctx?: LogContext) => emit('warn', message, ctx),
-  error: (message: string, ctx?: LogContext) => emit('error', message, ctx)
-};
+function createLogger(defaults: LogContext = {}): Logger {
+  function merge(ctx?: LogContext): LogContext {
+    if (!ctx) return defaults;
+    return { ...defaults, ...ctx };
+  }
 
-export type { LogContext };
+  return {
+    debug: (message: string, ctx?: LogContext) => emit('debug', message, merge(ctx)),
+    info: (message: string, ctx?: LogContext) => emit('info', message, merge(ctx)),
+    warn: (message: string, ctx?: LogContext) => emit('warn', message, merge(ctx)),
+    error: (message: string, ctx?: LogContext) => emit('error', message, merge(ctx)),
+    withContext: (extra: LogContext) => createLogger({ ...defaults, ...extra })
+  };
+}
+
+export const logger: Logger = createLogger();
+
+export type { LogContext, Logger };

@@ -15,7 +15,6 @@ import {
   operationalAnomalies,
   reports
 } from '@anonshare/infrastructure/db/schema';
-import { logger } from '@anonshare/infrastructure/logger';
 import {
   listRateLimitBlockedCountsByDay,
   RATE_LIMIT_BLOCKED_METRIC_SURFACES
@@ -24,6 +23,7 @@ import { getRedisClient } from '@anonshare/infrastructure/redis';
 import { type StorageHeadObject, storageAdapter } from '@anonshare/infrastructure/storage';
 import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { type Context, Hono } from 'hono';
+import { logger } from '../logger';
 import {
   enqueueCleanupFileJob,
   getCleanupQueue,
@@ -56,7 +56,7 @@ type AnomalyRecord = {
   id: string;
   type: typeof operationalAnomalies.$inferSelect.type;
   fileId: string | null;
-  details: Record<string, unknown> | null;
+  details: unknown;
   detectedAt: Date;
   resolvedAt: Date | null;
   resolution: string | null;
@@ -281,6 +281,30 @@ function getAnomalySeverity(
   return getFallbackSeverity(type);
 }
 
+function normalizeAnomalyDetails(details: unknown): Record<string, unknown> | null {
+  if (details === null || details === undefined) {
+    return null;
+  }
+
+  if (typeof details === 'string') {
+    try {
+      return normalizeAnomalyDetails(JSON.parse(details));
+    } catch {
+      return { raw: details };
+    }
+  }
+
+  if (Array.isArray(details)) {
+    return { items: details };
+  }
+
+  if (typeof details === 'object') {
+    return details as Record<string, unknown>;
+  }
+
+  return { value: details };
+}
+
 function accessDeniedBody(reason: 'session_required' | 'session_expired' | 'not_allowlisted') {
   switch (reason) {
     case 'session_required':
@@ -462,7 +486,7 @@ async function defaultListAnomalies(limit: number): Promise<AnomalyRecord[]> {
       id: operationalAnomalies.id,
       type: operationalAnomalies.type,
       fileId: operationalAnomalies.fileId,
-      details: sql<Record<string, unknown> | null>`${operationalAnomalies.details}`,
+      details: operationalAnomalies.details,
       detectedAt: operationalAnomalies.detectedAt,
       resolvedAt: operationalAnomalies.resolvedAt,
       resolution: operationalAnomalies.resolution
@@ -915,16 +939,20 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
 
       return c.json(
         {
-          anomalies: anomalies.map((anomaly) => ({
-            id: anomaly.id,
-            type: anomaly.type,
-            severity: getAnomalySeverity(anomaly.type, anomaly.details),
-            fileId: anomaly.fileId,
-            details: anomaly.details,
-            detectedAt: anomaly.detectedAt.toISOString(),
-            resolvedAt: anomaly.resolvedAt?.toISOString() ?? null,
-            resolution: anomaly.resolution
-          }))
+          anomalies: anomalies.map((anomaly) => {
+            const details = normalizeAnomalyDetails(anomaly.details);
+
+            return {
+              id: anomaly.id,
+              type: anomaly.type,
+              severity: getAnomalySeverity(anomaly.type, details),
+              fileId: anomaly.fileId,
+              details,
+              detectedAt: anomaly.detectedAt.toISOString(),
+              resolvedAt: anomaly.resolvedAt?.toISOString() ?? null,
+              resolution: anomaly.resolution
+            };
+          })
         },
         200
       );
@@ -1459,15 +1487,16 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
       logger.info('Admin moderation action applied', {
         event:
           action === 'hide'
-            ? 'admin.file_hidden'
+            ? 'file.hidden'
             : action === 'restore'
               ? 'admin.file_restored'
-              : 'admin.file_deleted',
+              : 'file.deleted',
         requestId,
         actor: 'admin',
         entity: { type: 'file', id: fileId },
         outcome: 'success',
         action,
+        trigger: action === 'restore' ? 'manual_restore' : 'manual',
         previousStatus,
         nextStatus,
         restoredFrom: latestHiddenPreviousStatus

@@ -7,6 +7,7 @@
     "packages/*"
   ],
   "scripts": {
+    "dev": "bun run --workspaces --if-present --parallel dev",
     "dev:web": "bun run --filter '@anonshare/web' dev",
     "dev:api": "bun run --filter '@anonshare/api' dev",
     "dev:worker": "bun run --filter '@anonshare/worker' dev",
@@ -23,7 +24,9 @@
     "infra:down": "docker compose down",
     "infra:check": "bun --env-file=.env packages/infrastructure/src/scripts/check-local-platform.ts",
     "infra:reset": "docker compose down -v && docker compose up -d",
-    "verify": "bun run typecheck && bun run lint && bun run test && bun run build"
+    "verify:deps": "bun run infra:check",
+    "verify:migrations": "bun run db:generate && git diff --exit-code -- packages/infrastructure/src/db/migrations && bun run db:migrate",
+    "verify": "bun run verify:deps && bun run typecheck && bun run lint && bun run test && bun run build && bun run verify:migrations"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.6",

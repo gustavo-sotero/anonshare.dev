@@ -1,0 +1,206 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: "1.3.10"
+  NODE_ENV: test
+  DATABASE_URL: postgres://anonshare:anonshare_dev@localhost:5432/anonshare_dev
+  REDIS_URL: redis://localhost:6379
+  STORAGE_ENDPOINT: http://localhost:9000
+  STORAGE_ACCESS_KEY_ID: minioadmin
+  STORAGE_SECRET_ACCESS_KEY: minioadmin
+  STORAGE_BUCKET: anonshare-dev
+  STORAGE_REGION: us-east-1
+  APP_BASE_URL: http://localhost:3000
+  APP_API_URL: http://localhost:3001
+  GITHUB_CLIENT_ID: ci-test-client-id
+  GITHUB_CLIENT_SECRET: ci-test-client-secret
+  GITHUB_ALLOWED_USER_ID: "12345"
+  SESSION_SECRET: ci-test-session-secret-min-32-chars-long
+  POSTGRES_USER: anonshare
+  POSTGRES_PASSWORD: anonshare_dev
+  POSTGRES_DB: anonshare_dev
+  POSTGRES_PORT: "5432"
+  REDIS_PORT: "6379"
+  MINIO_ROOT_USER: minioadmin
+  MINIO_ROOT_PASSWORD: minioadmin
+  MINIO_BUCKET: anonshare-dev
+  MINIO_API_PORT: "9000"
+  WORKER_HEALTH_PORT: "3002"
+
+jobs:
+  quality:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: anonshare
+          POSTGRES_PASSWORD: anonshare_dev
+          POSTGRES_DB: anonshare_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U anonshare"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+      minio:
+        image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+        ports:
+          - 9000:9000
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+        options: >-
+          --health-cmd "curl -f http://localhost:9000/minio/health/live || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Create MinIO bucket
+        run: |
+          # Install mc (MinIO client) and create the default bucket
+          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+          chmod +x /usr/local/bin/mc
+          mc alias set local http://localhost:9000 minioadmin minioadmin
+          mc mb local/anonshare-dev --ignore-existing
+
+      - name: Validate infrastructure dependencies
+        run: bun packages/infrastructure/src/scripts/check-local-platform.ts
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Test
+        run: bun run test
+
+      - name: Build
+        run: bun run build
+        env:
+          NODE_ENV: production
+
+      - name: Smoke test built health endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          wait_for_url() {
+            local url="$1"
+
+            for _ in {1..30}; do
+              if curl -fsS "$url" >/dev/null; then
+                return 0
+              fi
+
+              sleep 1
+            done
+
+            echo "Timed out waiting for $url" >&2
+            return 1
+          }
+
+          assert_header() {
+            local url="$1"
+            local header_name="$2"
+            local expected_value="$3"
+            local actual_value
+
+            actual_value=$(curl -fsS -D - -o /dev/null "$url" \
+              | tr -d '\r' \
+              | awk -F': ' -v header_name="$(echo "$header_name" | tr '[:upper:]' '[:lower:]')" 'tolower($1) == header_name { print $2 }' \
+              | tail -n 1)
+
+            if [ "$actual_value" != "$expected_value" ]; then
+              echo "Expected $header_name: $expected_value for $url, got: ${actual_value:-<missing>}" >&2
+              return 1
+            fi
+          }
+
+          bun run --filter '@anonshare/api' start > api.log 2>&1 &
+          API_PID=$!
+          bun run --filter '@anonshare/web' start > web.log 2>&1 &
+          WEB_PID=$!
+          bun run --filter '@anonshare/worker' start > worker.log 2>&1 &
+          WORKER_PID=$!
+
+          cleanup() {
+            status=$?
+            kill "$API_PID" "$WEB_PID" "$WORKER_PID" >/dev/null 2>&1 || true
+            wait "$API_PID" >/dev/null 2>&1 || true
+            wait "$WEB_PID" >/dev/null 2>&1 || true
+            wait "$WORKER_PID" >/dev/null 2>&1 || true
+
+            if [ "$status" -ne 0 ]; then
+              echo "::group::api.log"
+              cat api.log || true
+              echo "::endgroup::"
+              echo "::group::web.log"
+              cat web.log || true
+              echo "::endgroup::"
+              echo "::group::worker.log"
+              cat worker.log || true
+              echo "::endgroup::"
+            fi
+
+            exit "$status"
+          }
+
+          trap cleanup EXIT
+
+          wait_for_url http://localhost:3001/health
+          wait_for_url http://localhost:3000/health
+          wait_for_url http://localhost:3002/health
+
+          assert_header http://localhost:3001/health x-content-type-options nosniff
+          assert_header http://localhost:3001/health referrer-policy strict-origin-when-cross-origin
+          assert_header http://localhost:3000/health cache-control no-store
+          assert_header http://localhost:3000/health x-content-type-options nosniff
+          assert_header http://localhost:3002/health cache-control no-store
+          assert_header http://localhost:3002/health x-content-type-options nosniff
+
+      - name: Validate migration drift
+        run: |
+          bun packages/infrastructure/src/scripts/run-drizzle.ts generate
+          git diff --exit-code -- packages/infrastructure/src/db/migrations
+
+      - name: Validate migrations
+        run: bun packages/infrastructure/src/scripts/run-drizzle.ts migrate

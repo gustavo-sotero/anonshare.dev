@@ -1,6 +1,6 @@
-import { createConnection } from 'node:net';
 import { SQL } from 'bun';
 import { db, redis } from '../config/index';
+import { pingRedisUrl } from '../redis/index';
 import { storageAdapter } from '../storage/index';
 
 export type DependencyHealthName = 'postgres' | 'redis' | 'storage';
@@ -63,59 +63,7 @@ async function runDatabaseQuery(): Promise<void> {
 }
 
 async function pingRedisConnection(): Promise<void> {
-  const parsed = new URL(redis.url());
-  const host = parsed.hostname;
-  const port = Number(parsed.port || '6379');
-
-  await new Promise<void>((resolve, reject) => {
-    const socket = createConnection({ host, port });
-    let settled = false;
-    let response = '';
-
-    const finish = (callback: () => void) => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      socket.removeAllListeners();
-      socket.destroy();
-      callback();
-    };
-
-    socket.setTimeout(2_000);
-
-    socket.on('connect', () => {
-      socket.write('*1\r\n$4\r\nPING\r\n');
-    });
-
-    socket.on('data', (chunk) => {
-      response += chunk.toString();
-
-      if (response.startsWith('+PONG')) {
-        finish(resolve);
-        return;
-      }
-
-      if (response.startsWith('-')) {
-        finish(() => reject(new Error(response.trim())));
-      }
-    });
-
-    socket.on('timeout', () => {
-      finish(() => reject(new Error('Redis health check timed out')));
-    });
-
-    socket.on('error', (error) => {
-      finish(() => reject(error));
-    });
-
-    socket.on('close', () => {
-      if (!settled) {
-        finish(() => reject(new Error('Redis connection closed before PONG')));
-      }
-    });
-  });
+  await pingRedisUrl(redis.url());
 }
 
 async function pingStorageConnection(): Promise<void> {

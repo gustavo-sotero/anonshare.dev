@@ -143,6 +143,27 @@ describe('environment validation', () => {
     expect(() => validateWorkerEnv()).toThrow(/STORAGE_/);
   });
 
+  test('validateWorkerEnv returns the worker health port with a safe default', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.APP_BASE_URL = 'https://anonshare.dev';
+    process.env.DATABASE_URL = 'postgresql://anonshare:anonshare@localhost:5432/anonshare';
+    process.env.REDIS_URL = 'redis://localhost:6379';
+    process.env.STORAGE_ENDPOINT = 'https://storage.example.com';
+    process.env.STORAGE_ACCESS_KEY_ID = 'access-key';
+    process.env.STORAGE_SECRET_ACCESS_KEY = 'secret-key';
+    process.env.STORAGE_BUCKET = 'anonshare-prod';
+
+    expect(validateWorkerEnv()).toMatchObject({
+      appBaseUrl: 'https://anonshare.dev',
+      appEnv: 'production',
+      healthPort: 3002
+    });
+
+    process.env.WORKER_HEALTH_PORT = '4100';
+
+    expect(validateWorkerEnv()).toMatchObject({ healthPort: 4100 });
+  });
+
   test('validateWebEnv rejects malformed API URLs', () => {
     process.env.APP_BASE_URL = 'http://localhost:3000';
     process.env.APP_API_URL = 'localhost:3001';

@@ -8,10 +8,10 @@ import {
 import type { OperationalAnomalySeverity } from '@anonshare/domain';
 import type { createDb } from '@anonshare/infrastructure/db';
 import { files, operationalAnomalies, systemSettings } from '@anonshare/infrastructure/db/schema';
-import { logger } from '@anonshare/infrastructure/logger';
 import type { storageAdapter } from '@anonshare/infrastructure/storage';
 import type { Job, Queue } from 'bullmq';
 import { and, asc, eq, gt, inArray, isNotNull, isNull, lt, type SQL, sql } from 'drizzle-orm';
+import { logger } from '../logger';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 

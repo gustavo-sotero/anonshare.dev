@@ -1,10 +1,10 @@
 import type { CleanupFileJobPayload } from '@anonshare/contracts';
 import type { createDb } from '@anonshare/infrastructure/db';
 import { files, operationalAnomalies } from '@anonshare/infrastructure/db/schema';
-import { logger } from '@anonshare/infrastructure/logger';
 import { StorageError, type storageAdapter } from '@anonshare/infrastructure/storage';
 import type { Job } from 'bullmq';
 import { and, eq, isNull } from 'drizzle-orm';
+import { logger } from '../logger';
 
 export type CleanupFileHandlerDeps = {
   db: ReturnType<typeof createDb>;

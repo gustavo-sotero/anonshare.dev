@@ -99,6 +99,7 @@ describe('registerReconcileScheduler', () => {
       expect.objectContaining({
         event: 'reconcile_scheduler_registered',
         outcome: 'success',
+        service: 'worker',
         attempt: 1,
         intervalMs: RECONCILE_SCHEDULER_DEFAULT_INTERVAL_MS
       })
@@ -128,7 +129,8 @@ describe('registerReconcileScheduler', () => {
         event: 'reconcile_scheduler_registered',
         attempt: 3,
         maxAttempts: 4,
-        outcome: 'success'
+        outcome: 'success',
+        service: 'worker'
       })
     );
   });
@@ -157,6 +159,7 @@ describe('registerReconcileScheduler', () => {
       expect.objectContaining({
         event: 'reconcile_scheduler_registration_failed',
         outcome: 'failure',
+        service: 'worker',
         attempt: 3,
         maxAttempts: 3,
         reason: 'attempts_exhausted'

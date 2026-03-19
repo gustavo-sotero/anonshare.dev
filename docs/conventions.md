@@ -8,7 +8,7 @@ This document consolidates the working conventions established in Module 1 so la
 - App and package folders use `kebab-case`.
 - TanStack file routes follow TanStack naming conventions such as `share.$token.tsx`.
 - Environment variables are uppercase with `_` separators.
-- Structured log `event` values use `snake_case`.
+- Structured log `event` values use stable machine-readable identifiers: operational/platform events use `snake_case`, and product lifecycle milestones may use dotted namespaces such as `upload.created` or `file.hidden`.
 - Queue names use `kebab-case` so they remain easy to read in BullMQ tooling.
 
 ## Import Boundaries
@@ -20,8 +20,8 @@ This document consolidates the working conventions established in Module 1 so la
 
 ## Environment Policy
 
-- Each executable process owns its own `.env` file.
-- The root `.env` is reserved for local Docker Compose infrastructure defaults.
+- A single root `.env` file configures all executable processes.
+- The same root `.env` is used for local Docker Compose infrastructure defaults.
 - API and worker boot fail fast on missing required runtime variables.
 - Web runtime entrypoints validate env, while the production build stays resilient enough to compile without private runtime secrets.
 - Root operational scripts derive local connection URLs from the root `.env` instead of maintaining a separate migration-only config.
@@ -32,6 +32,7 @@ This document consolidates the working conventions established in Module 1 so la
 - Include `event` on every operational log.
 - Include `actor`, `entity`, `outcome`, and `requestId` whenever they are known.
 - HTTP request logs must record method, path, status, and duration.
+- Product lifecycle events that matter for observability must remain stable across processes: `upload.created`, `download.started`, `download.completed`, `report.created`, `file.hidden`, and `file.deleted`.
 - Prefer machine-parseable context over free-form text fields.
 
 ## Operational Commands
