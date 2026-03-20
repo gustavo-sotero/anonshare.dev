@@ -3,43 +3,30 @@ import type {
   ExpireFileJobPayload,
   ReconcileJobPayload
 } from '@anonshare/contracts';
+import { LIFECYCLE_JOB_RETENTION } from '@anonshare/contracts';
 import {
-  LIFECYCLE_JOB_RETENTION,
-  QUEUE_CLEANUP_FILE,
-  QUEUE_EXPIRE_FILE,
-  QUEUE_RECONCILE
-} from '@anonshare/contracts';
-import { getProducerConnectionConfig } from '@anonshare/infrastructure/queue';
-import { Queue } from 'bullmq';
+  createCleanupFileProducerQueue,
+  createExpireFileProducerQueue,
+  createReconcileProducerQueue
+} from '@anonshare/infrastructure/queue';
+import type { Queue } from 'bullmq';
 
 let _expireQueue: Queue<ExpireFileJobPayload> | null = null;
 let _cleanupQueue: Queue<CleanupFileJobPayload> | null = null;
 let _reconcileQueue: Queue<ReconcileJobPayload> | null = null;
 
 export function getExpireQueue(): Queue<ExpireFileJobPayload> {
-  if (!_expireQueue) {
-    _expireQueue = new Queue<ExpireFileJobPayload>(QUEUE_EXPIRE_FILE, {
-      connection: getProducerConnectionConfig()
-    });
-  }
+  _expireQueue ??= createExpireFileProducerQueue();
   return _expireQueue;
 }
 
 export function getCleanupQueue(): Queue<CleanupFileJobPayload> {
-  if (!_cleanupQueue) {
-    _cleanupQueue = new Queue<CleanupFileJobPayload>(QUEUE_CLEANUP_FILE, {
-      connection: getProducerConnectionConfig()
-    });
-  }
+  _cleanupQueue ??= createCleanupFileProducerQueue();
   return _cleanupQueue;
 }
 
 export function getReconcileQueue(): Queue<ReconcileJobPayload> {
-  if (!_reconcileQueue) {
-    _reconcileQueue = new Queue<ReconcileJobPayload>(QUEUE_RECONCILE, {
-      connection: getProducerConnectionConfig()
-    });
-  }
+  _reconcileQueue ??= createReconcileProducerQueue();
   return _reconcileQueue;
 }
 

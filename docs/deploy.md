@@ -37,6 +37,7 @@ All `APP_BASE_URL` and `APP_API_URL` values must use `https://` in any environme
 ### Queue Version Alignment
 
 Both `apps/api` (job producer) and `apps/worker` (job consumer) depend on BullMQ. They must run the same major version to avoid serialisation or protocol mismatches. The workspace currently pins `^5.71.0` in both packages.
+Run `bun run verify:bullmq` from the workspace root before deployment or after dependency changes to enforce that parity automatically.
 
 ### Redis Ownership and Queue Connections
 
@@ -93,6 +94,7 @@ Do not maintain a separate, divergent env model for each process. The variable n
 - [ ] S3-compatible bucket created and accessible with the configured storage credentials
 - [ ] The platform injects the canonical environment variables listed above into each process
 - [ ] `GITHUB_ALLOWED_USER_ID` verified against `https://api.github.com/users/<yourlogin>`
+- [ ] `bun run verify:bullmq` passes from the workspace root so API and worker BullMQ versions stay aligned
 
 ### Database
 
@@ -108,6 +110,9 @@ bun run db:seed
 ### Build
 
 ```bash
+# Verify the local quality gate and BullMQ parity before shipping
+bun run verify
+
 # Build all processes from the workspace root
 bun run build
 ```

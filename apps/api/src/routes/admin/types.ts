@@ -125,3 +125,5 @@ export type AdminRouterDeps = {
   enqueueCleanupFile?: (fileId: string, objectKey: string, delayMs?: number) => Promise<void>;
   getDb?: () => ReturnType<typeof createDb>;
 };
+
+export type ResolvedAdminRouterDeps = Required<AdminRouterDeps>;

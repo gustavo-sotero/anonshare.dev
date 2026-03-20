@@ -5,10 +5,15 @@ import type {
 } from '@anonshare/contracts';
 import { validateWorkerEnv } from '@anonshare/infrastructure/config';
 import { createDb } from '@anonshare/infrastructure/db';
-import { getWorkerConnectionConfig } from '@anonshare/infrastructure/queue';
+import {
+  createCleanupFileWorkerQueue,
+  createExpireFileWorkerQueue,
+  createQueueWorker,
+  createReconcileWorkerQueue
+} from '@anonshare/infrastructure/queue';
 import { closeRedisClient } from '@anonshare/infrastructure/redis';
 import { storageAdapter } from '@anonshare/infrastructure/storage';
-import { Queue, Worker } from 'bullmq';
+import type { Job } from 'bullmq';
 import { registerReconcileScheduler } from './bootstrap/register-reconcile-scheduler';
 import { makeHandleCleanupFile } from './handlers/cleanup-file';
 import { makeHandleExpireFile } from './handlers/expire-file';
@@ -33,39 +38,36 @@ const healthServer = startWorkerHealthServer({
   port: config.healthPort
 });
 
-// Use canonical worker connection config from infrastructure so all worker
-// processes share the same connection policy. BullMQ creates its own ioredis
-// connection from the URL, avoiding version-mismatch conflicts with the
-// infrastructure package's shared client.
-const connection = getWorkerConnectionConfig();
-
 // ─── Shared dependencies ──────────────────────────────────────────────────────
 
 const db = createDb();
 
 // ─── Queues (producers used by handlers) ─────────────────────────────────────
 
-const expireQueue = new Queue<ExpireFileJobPayload>(QUEUE_EXPIRE_FILE, { connection });
-const cleanupQueue = new Queue<CleanupFileJobPayload>(QUEUE_CLEANUP_FILE, { connection });
-const reconcileQueue = new Queue<ReconcileJobPayload>(QUEUE_RECONCILE, { connection });
+const expireQueue = createExpireFileWorkerQueue();
+const cleanupQueue = createCleanupFileWorkerQueue();
+const reconcileQueue = createReconcileWorkerQueue();
 
 // ─── Workers ─────────────────────────────────────────────────────────────────
 
-const expireWorker = new Worker(QUEUE_EXPIRE_FILE, makeHandleExpireFile({ db, cleanupQueue }), {
-  connection,
-  concurrency: 5
-});
-
-const cleanupWorker = new Worker(
-  QUEUE_CLEANUP_FILE,
-  makeHandleCleanupFile({ db, storage: storageAdapter }),
-  { connection, concurrency: 5 }
+const expireWorker = createQueueWorker<ExpireFileJobPayload>(
+  QUEUE_EXPIRE_FILE,
+  makeHandleExpireFile({ db, cleanupQueue }),
+  {
+    concurrency: 5
+  }
 );
 
-const reconcileWorker = new Worker(
+const cleanupWorker = createQueueWorker<CleanupFileJobPayload>(
+  QUEUE_CLEANUP_FILE,
+  makeHandleCleanupFile({ db, storage: storageAdapter }),
+  { concurrency: 5 }
+);
+
+const reconcileWorker = createQueueWorker<ReconcileJobPayload>(
   QUEUE_RECONCILE,
   makeHandleReconcile({ db, storage: storageAdapter, cleanupQueue, expireQueue }),
-  { connection, concurrency: 1 }
+  { concurrency: 1 }
 );
 
 await Promise.all([
@@ -85,14 +87,14 @@ runtimeHealthState.ready = true;
 // ─── Error logging ────────────────────────────────────────────────────────────
 
 for (const worker of [expireWorker, cleanupWorker, reconcileWorker]) {
-  worker.on('completed', (job) => {
+  worker.on('completed', (job: Job | undefined) => {
     logger.info(
       'Job completed',
       buildWorkerJobLogContext({ event: 'job_completed', job, queue: worker.name })
     );
   });
 
-  worker.on('failed', (job, err) => {
+  worker.on('failed', (job: Job | undefined, err: Error) => {
     logger.error(
       'Job failed',
       buildWorkerJobLogContext({

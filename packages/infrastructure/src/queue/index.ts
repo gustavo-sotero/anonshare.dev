@@ -1,4 +1,18 @@
+import type {
+  CleanupFileJobPayload,
+  ExpireFileJobPayload,
+  ReconcileJobPayload
+} from '@anonshare/contracts';
+import { QUEUE_CLEANUP_FILE, QUEUE_EXPIRE_FILE, QUEUE_RECONCILE } from '@anonshare/contracts';
+import type { Processor, QueueOptions, WorkerOptions } from 'bullmq';
+import { Queue, Worker } from 'bullmq';
 import { redis as redisConfig } from '../config/index';
+
+type QueueConnectionRole = 'producer' | 'worker';
+
+function getQueueConnectionConfig(role: QueueConnectionRole): { url: string } {
+  return role === 'worker' ? getWorkerConnectionConfig() : getProducerConnectionConfig();
+}
 
 /**
  * Standard BullMQ connection options for HTTP-facing producer processes (API).
@@ -23,4 +37,71 @@ export function getProducerConnectionConfig(): { url: string } {
  */
 export function getWorkerConnectionConfig(): { url: string } {
   return { url: redisConfig.url() };
+}
+
+export function createProducerQueue<DataType>(
+  name: string,
+  options: Omit<QueueOptions, 'connection'> = {}
+): Queue<DataType, unknown, string> {
+  return new Queue<DataType, unknown, string>(name, {
+    ...options,
+    connection: getQueueConnectionConfig('producer')
+  });
+}
+
+export function createWorkerQueue<DataType>(
+  name: string,
+  options: Omit<QueueOptions, 'connection'> = {}
+): Queue<DataType, unknown, string> {
+  return new Queue<DataType, unknown, string>(name, {
+    ...options,
+    connection: getQueueConnectionConfig('worker')
+  });
+}
+
+export function createQueueWorker<DataType, ResultType = void, NameType extends string = string>(
+  name: NameType,
+  processor: Processor<DataType, ResultType, NameType>,
+  options: Omit<WorkerOptions, 'connection'> = {}
+): Worker<DataType, ResultType, NameType> {
+  return new Worker<DataType, ResultType, NameType>(name, processor, {
+    ...options,
+    connection: getQueueConnectionConfig('worker')
+  });
+}
+
+export function createExpireFileProducerQueue(
+  options: Omit<QueueOptions, 'connection'> = {}
+): Queue<ExpireFileJobPayload, unknown, string> {
+  return createProducerQueue<ExpireFileJobPayload>(QUEUE_EXPIRE_FILE, options);
+}
+
+export function createCleanupFileProducerQueue(
+  options: Omit<QueueOptions, 'connection'> = {}
+): Queue<CleanupFileJobPayload, unknown, string> {
+  return createProducerQueue<CleanupFileJobPayload>(QUEUE_CLEANUP_FILE, options);
+}
+
+export function createReconcileProducerQueue(
+  options: Omit<QueueOptions, 'connection'> = {}
+): Queue<ReconcileJobPayload, unknown, string> {
+  return createProducerQueue<ReconcileJobPayload>(QUEUE_RECONCILE, options);
+}
+
+export function createExpireFileWorkerQueue(
+  options: Omit<QueueOptions, 'connection'> = {}
+): Queue<ExpireFileJobPayload, unknown, string> {
+  return createWorkerQueue<ExpireFileJobPayload>(QUEUE_EXPIRE_FILE, options);
+}
+
+export function createCleanupFileWorkerQueue(
+  options: Omit<QueueOptions, 'connection'> = {}
+): Queue<CleanupFileJobPayload, unknown, string> {
+  return createWorkerQueue<CleanupFileJobPayload>(QUEUE_CLEANUP_FILE, options);
+}
+
+export function createReconcileWorkerQueue(
+  options: Omit<QueueOptions, 'connection'> = {}
+): Queue<ReconcileJobPayload, unknown, string> {
+  return createWorkerQueue<ReconcileJobPayload>(QUEUE_RECONCILE, options);
 }

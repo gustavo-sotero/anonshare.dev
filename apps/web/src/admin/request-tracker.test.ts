@@ -41,6 +41,24 @@ describe('createRequestTracker', () => {
     expect(first.signal.aborted).toBe(true);
   });
 
+  it('keeps only the latest request active during rapid successive changes', () => {
+    const tracker = createRequestTracker();
+    const requests = Array.from({ length: 20 }, () => tracker.beginRequest());
+
+    const latest = requests[requests.length - 1];
+    if (!latest) {
+      throw new Error('Expected at least one request token.');
+    }
+
+    for (const request of requests.slice(0, -1)) {
+      expect(request.signal.aborted).toBe(true);
+      expect(request.isCurrent()).toBe(false);
+    }
+
+    expect(latest.signal.aborted).toBe(false);
+    expect(latest.isCurrent()).toBe(true);
+  });
+
   it('aborts signal on disposal', () => {
     const tracker = createRequestTracker();
     const req = tracker.beginRequest();

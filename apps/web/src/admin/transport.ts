@@ -50,6 +50,13 @@ export type DashboardState =
 
 export type OnAdminAccessLost = (error: AdminAccessError) => void;
 
+export type AdminLogoutResult =
+  | { ok: true }
+  | {
+      ok: false;
+      message: string;
+    };
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 export const REPORT_PAGE_SIZE = 20;
@@ -131,6 +138,26 @@ export async function postAdminJson(
   }
 
   return { ok: response.ok, body, status: response.status };
+}
+
+export async function logoutAdmin(signal?: AbortSignal): Promise<AdminLogoutResult> {
+  try {
+    const result = await postAdminJson('/api/admin/auth/logout', {}, signal);
+
+    if (result.ok) {
+      return { ok: true };
+    }
+
+    return {
+      ok: false,
+      message: extractErrorMessage(result.body, 'Server logout could not be confirmed.')
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : 'Server logout could not be confirmed.'
+    };
+  }
 }
 
 // ─── Data fetchers ───────────────────────────────────────────────────────────

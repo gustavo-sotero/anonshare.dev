@@ -23,7 +23,9 @@
     "db:seed": "bun --env-file=../../.env src/scripts/seed.ts"
   },
   "dependencies": {
+    "@anonshare/contracts": "workspace:*",
     "@anonshare/domain": "workspace:*",
+    "bullmq": "^5.71.0",
     "drizzle-orm": "^0.45.1",
     "ioredis": "^5.10.0"
   },

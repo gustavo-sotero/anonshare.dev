@@ -4,6 +4,7 @@ import { createFileRoute, Link } from '@tanstack/react-router';
 import { useCallback, useEffect, useState } from 'react';
 import { SiteFrame } from '~/components/site-frame';
 import { formatDateDeterministic } from '~/share/date-format';
+import { createInitialSharePageUiState, type ReportReason } from '~/share/page-state';
 import { canReportUnavailableFile } from '~/share/reporting';
 
 // ─── Loader result type (shared between head, loader, and component) ──────────
@@ -138,7 +139,6 @@ function mimeLabel(mimeType: string): string {
 // ─── Status badge map ─────────────────────────────────────────────────────────
 
 type UnavailabilityInfo = { label: string; message: string };
-type ReportReason = (typeof reportReasonValues)[number];
 
 const TEXT_PREVIEW_MAX_BYTES = 64 * 1024;
 
@@ -473,47 +473,51 @@ function SharePage() {
   // component is defined after the Route object (circular reference at definition
   // time). The explicit cast is safe — the loader always returns LoaderResult.
   const loader = Route.useLoaderData() as LoaderResult | undefined;
+  const initialUiState = createInitialSharePageUiState();
 
   // All hooks must be declared unconditionally before any early returns.
-  const [downloadState, setDownloadState] = useState<'idle' | 'fetching' | 'error'>('idle');
-  const [downloadError, setDownloadError] = useState<string | null>(null);
-  const [previewState, setPreviewState] = useState<'hidden' | 'loading' | 'ready' | 'error'>(
-    'hidden'
+  const [downloadState, setDownloadState] = useState<'idle' | 'fetching' | 'error'>(
+    initialUiState.downloadState
   );
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [previewMime, setPreviewMime] = useState<string>('');
+  const [downloadError, setDownloadError] = useState<string | null>(initialUiState.downloadError);
+  const [previewState, setPreviewState] = useState<'hidden' | 'loading' | 'ready' | 'error'>(
+    initialUiState.previewState
+  );
+  const [previewUrl, setPreviewUrl] = useState<string | null>(initialUiState.previewUrl);
+  const [previewMime, setPreviewMime] = useState<string>(initialUiState.previewMime);
   // Track whether a one-time file has been consumed in this session
-  const [consumed, setConsumed] = useState(false);
+  const [consumed, setConsumed] = useState(initialUiState.consumed);
   const [runtimeUnavailable, setRuntimeUnavailable] = useState<{
     code: string;
     message: string;
-  } | null>(null);
+  } | null>(initialUiState.runtimeUnavailable);
   // Report section state
-  const [reportOpen, setReportOpen] = useState(false);
-  const [reportReason, setReportReason] = useState<ReportReason>(reportReasonValues[0]);
-  const [reportMessage, setReportMessage] = useState('');
+  const [reportOpen, setReportOpen] = useState(initialUiState.reportOpen);
+  const [reportReason, setReportReason] = useState<ReportReason>(initialUiState.reportReason);
+  const [reportMessage, setReportMessage] = useState(initialUiState.reportMessage);
   const [reportPhase, setReportPhase] = useState<'idle' | 'submitting' | 'success' | 'error'>(
-    'idle'
+    initialUiState.reportPhase
   );
-  const [reportError, setReportError] = useState<string | null>(null);
+  const [reportError, setReportError] = useState<string | null>(initialUiState.reportError);
 
   // Reset all token-scoped local state when navigating between share tokens.
   // This prevents state from token A (consumed, preview, report, etc.) bleeding
   // into the view for token B within the same route instance.
   // biome-ignore lint/correctness/useExhaustiveDependencies: token is intentionally in deps to trigger reset on navigation between share pages
   useEffect(() => {
-    setDownloadState('idle');
-    setDownloadError(null);
-    setPreviewState('hidden');
-    setPreviewUrl(null);
-    setPreviewMime('');
-    setConsumed(false);
-    setRuntimeUnavailable(null);
-    setReportOpen(false);
-    setReportReason(reportReasonValues[0]);
-    setReportMessage('');
-    setReportPhase('idle');
-    setReportError(null);
+    const resetState = createInitialSharePageUiState();
+    setDownloadState(resetState.downloadState);
+    setDownloadError(resetState.downloadError);
+    setPreviewState(resetState.previewState);
+    setPreviewUrl(resetState.previewUrl);
+    setPreviewMime(resetState.previewMime);
+    setConsumed(resetState.consumed);
+    setRuntimeUnavailable(resetState.runtimeUnavailable);
+    setReportOpen(resetState.reportOpen);
+    setReportReason(resetState.reportReason);
+    setReportMessage(resetState.reportMessage);
+    setReportPhase(resetState.reportPhase);
+    setReportError(resetState.reportError);
   }, [token]);
 
   const closeReportPanel = useCallback(() => {

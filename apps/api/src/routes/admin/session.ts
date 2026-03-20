@@ -2,7 +2,7 @@ import type { Context } from 'hono';
 import { logger } from '../../logger';
 import { getRequestId, readCookieValue } from '../support';
 import { accessDeniedBody } from './helpers';
-import type { AdminRouterDeps, SessionRecord } from './types';
+import type { ResolvedAdminRouterDeps, SessionRecord } from './types';
 import { ADMIN_SESSION_COOKIE_NAME } from './types';
 
 export function getSessionId(c: Context): string | null {
@@ -14,7 +14,7 @@ export function getSessionId(c: Context): string | null {
 
 export async function requireAdminSession(
   c: Context,
-  deps: Required<AdminRouterDeps>
+  deps: ResolvedAdminRouterDeps
 ): Promise<{ ok: true; session: SessionRecord } | { ok: false; response: Response }> {
   const requestId = getRequestId(c);
   const sessionId = getSessionId(c);
