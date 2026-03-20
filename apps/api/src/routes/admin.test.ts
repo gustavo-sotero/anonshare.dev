@@ -356,6 +356,33 @@ describe('GET /admin/stats', () => {
       }
     ]);
   });
+
+  test('returns zero-filled rate-limit series when the optional blocked-counts dep is absent', async () => {
+    const app = buildApp({
+      findSessionById: async () => makeSession({ id: 'session-1' }),
+      getAllowedGithubUserId: () => '123456',
+      listAnomalies: async () => [],
+      listOpenAnomalyCounts: async () => [],
+      listReportStatusCounts: async () => [],
+      listReportCountsByDay: async () => [],
+      listAutoHiddenCountsByDay: async () => [],
+      listResolvedReportCountsByDay: async () => [],
+      listDismissedReportCountsByDay: async () => [],
+      // listRateLimitBlockedCountsByDay intentionally omitted
+      getQueues: () => [],
+      now: () => new Date('2026-03-12T12:00:00Z')
+    });
+
+    const response = await request(app, '/admin/stats', { 'x-admin-session-id': 'session-1' });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(adminLifecycleStatsResponseSchema.safeParse(body).success).toBe(true);
+    expect(body.abuseMetrics.rateLimitBlockedByDay).toHaveLength(14);
+    expect(
+      body.abuseMetrics.rateLimitBlockedByDay.every((entry: { count: number }) => entry.count === 0)
+    ).toBe(true);
+  });
 });
 
 describe('GET /admin/anomalies', () => {

@@ -3,6 +3,7 @@ import { isPreviewSupported } from '@anonshare/domain';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { useCallback, useEffect, useState } from 'react';
 import { SiteFrame } from '~/components/site-frame';
+import { formatDateDeterministic } from '~/share/date-format';
 import { canReportUnavailableFile } from '~/share/reporting';
 
 // ─── Loader result type (shared between head, loader, and component) ──────────
@@ -496,6 +497,25 @@ function SharePage() {
   );
   const [reportError, setReportError] = useState<string | null>(null);
 
+  // Reset all token-scoped local state when navigating between share tokens.
+  // This prevents state from token A (consumed, preview, report, etc.) bleeding
+  // into the view for token B within the same route instance.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: token is intentionally in deps to trigger reset on navigation between share pages
+  useEffect(() => {
+    setDownloadState('idle');
+    setDownloadError(null);
+    setPreviewState('hidden');
+    setPreviewUrl(null);
+    setPreviewMime('');
+    setConsumed(false);
+    setRuntimeUnavailable(null);
+    setReportOpen(false);
+    setReportReason(reportReasonValues[0]);
+    setReportMessage('');
+    setReportPhase('idle');
+    setReportError(null);
+  }, [token]);
+
   const closeReportPanel = useCallback(() => {
     setReportOpen(false);
     setReportPhase('idle');
@@ -773,9 +793,7 @@ function SharePage() {
             <div className="file-meta-item">
               <span className="file-meta-item__label">Expires</span>
               <span className="file-meta-item__value">
-                {new Date(file.expiresAt).toLocaleDateString(undefined, {
-                  dateStyle: 'medium'
-                })}
+                {formatDateDeterministic(file.expiresAt)}
               </span>
             </div>
           )}

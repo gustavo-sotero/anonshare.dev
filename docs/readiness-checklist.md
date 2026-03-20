@@ -64,8 +64,10 @@ Execute each flow end-to-end in the target environment.
 - [ ] Clicking "Sign in with GitHub" initiates the OAuth flow
 - [ ] Completing OAuth with the allowlisted account grants access to the dashboard
 - [ ] Completing OAuth with a non-allowlisted account returns to the login page with an error
+- [ ] After API restart, an in-progress OAuth flow still completes (state is stored in Redis, not process memory)
 - [ ] After login, refreshing the page keeps the session active
 - [ ] Logging out destroys the session and redirects to the login page
+- [ ] If logout cannot be confirmed by the API, the UI shows a local warning and API logs record the revocation failure
 
 ### 1.8 Admin Dashboard
 
@@ -85,6 +87,7 @@ Execute each flow end-to-end in the target environment.
 - [ ] `GET /health` on the API returns `{ status: 'ok' }` with all dependencies healthy
 - [ ] `GET /health` on the web process returns `{ status: 'ok' }`
 - [ ] `GET /health` on the worker process returns `{ status: 'ok' }` with `ready: true`
+- [ ] The API and worker health endpoints fail closed on dependency outages, while the web health endpoint remains process-only by design
 - [ ] All three processes (web, API, worker) start without errors
 - [ ] Worker logs `worker_ready` within 30 seconds of startup
 - [ ] Reconcile scheduler is registered (visible in BullMQ dashboard or logs)
@@ -118,7 +121,7 @@ Execute each flow end-to-end in the target environment.
 ## 5. CI/CD Verification
 
 - [ ] `.github/workflows/ci.yml` runs on every PR and push to `main`
-- [ ] CI runs dependency health check, lint, typecheck, tests, build, and migration validation
+- [ ] CI runs dependency health check, BullMQ version parity, lint, typecheck, tests, build, and migration validation
 - [ ] All CI steps pass with 0 errors on the `main` branch
 - [ ] CI uses containerized PostgreSQL, Redis, and MinIO for tests that need them
 - [ ] CI validates migration drift (`db:generate` + clean git diff on migrations)
@@ -138,5 +141,6 @@ Execute each flow end-to-end in the target environment.
 - [ ] CI is green on `main`
 - [ ] `docs/deploy.md` accurately reflects the current deployment topology
 - [ ] `docs/architecture.md` and `docs/conventions.md` are up to date
+- [ ] Docs, CI, and runtime scripts all describe the same supported environment contract
 - [ ] About page (`/about`) accurately describes the current stack and trade-offs
 - [ ] No TODO or FIXME comments remain in production-path code

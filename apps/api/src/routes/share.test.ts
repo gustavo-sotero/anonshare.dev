@@ -489,6 +489,68 @@ describe('GET /share/:token/download — standard download', () => {
     expect(typeof body.data.expiresAt).toBe('string');
   });
 
+  test('still returns presigned URL when download event persistence fails', async () => {
+    const app = buildApp(
+      makeMockDeps(
+        {
+          findFirst: makeFileRow({ oneTimeDownload: false }),
+          insertShouldThrow: true
+        },
+        { signedUrl: 'https://storage.example.com/dl?sig=resilient' }
+      )
+    );
+    const res = await request(app, '/share/Abc123defghijkl012/download');
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; data: { url: string } };
+    expect(body.ok).toBe(true);
+    expect(body.data.url).toBe('https://storage.example.com/dl?sig=resilient');
+  });
+
+  test('emits structured warning when download event persistence fails', async () => {
+    const app = buildApp(
+      makeMockDeps(
+        {
+          findFirst: makeFileRow({ oneTimeDownload: false }),
+          insertShouldThrow: true
+        },
+        { signedUrl: 'https://storage.example.com/dl?sig=logged' }
+      )
+    );
+
+    const originalLog = console.log;
+    const originalWarn = console.warn;
+    const entries: Array<Record<string, unknown>> = [];
+
+    const capture = (...args: unknown[]) => {
+      const line = args[0];
+      if (typeof line !== 'string') return;
+      try {
+        entries.push(JSON.parse(line) as Record<string, unknown>);
+      } catch {}
+    };
+
+    console.log = capture;
+    console.warn = capture;
+
+    try {
+      const res = await request(app, '/share/Abc123defghijkl012/download');
+      expect(res.status).toBe(200);
+
+      // Allow time for the non-blocking persistence to settle
+      await new Promise((r) => setTimeout(r, 50));
+    } finally {
+      console.log = originalLog;
+      console.warn = originalWarn;
+    }
+
+    const failLog = entries.find((e) => e.event === 'download_event_write_failed');
+    expect(failLog).toBeDefined();
+    expect(failLog?.outcome).toBe('failure');
+    expect(failLog?.entity).toEqual({ type: 'file', id: 'Abc123defghijkl012' });
+    expect(failLog?.error).toBeTruthy();
+  });
+
   test('returns 404 for unknown token', async () => {
     const app = buildApp(makeMockDeps({ findFirst: null }));
     const res = await request(app, '/share/Abc123defghijkl012/download');

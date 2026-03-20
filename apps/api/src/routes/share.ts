@@ -1,8 +1,7 @@
 import {
   API_ERROR_CODES,
   DOWNLOAD_URL_EXPIRY_SECONDS,
-  ONE_TIME_DOWNLOAD_CLEANUP_DELAY_MS,
-  shareTokenParamsSchema
+  ONE_TIME_DOWNLOAD_CLEANUP_DELAY_MS
 } from '@anonshare/contracts';
 import {
   getUnavailabilityMessage,
@@ -10,7 +9,7 @@ import {
   isPubliclyAccessible
 } from '@anonshare/domain';
 import { loadSystemSettingOrDefault } from '@anonshare/infrastructure/config';
-import { createDb } from '@anonshare/infrastructure/db';
+import type { createDb } from '@anonshare/infrastructure/db';
 import { downloadEvents, files } from '@anonshare/infrastructure/db/schema';
 import { checkRateLimit, recordRateLimitBlocked } from '@anonshare/infrastructure/rate-limit';
 import type { Redis } from '@anonshare/infrastructure/redis';
@@ -21,6 +20,14 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { logger } from '../logger';
 import { enqueueCleanupFileJob } from '../queues';
+import {
+  persistEventBestEffort,
+  recordBlockedMetricBestEffort,
+  errorBody as sharedErrorBody,
+  getDb as sharedGetDb,
+  hashIp as sharedHashIp,
+  parseShareToken as sharedParseShareToken
+} from './support';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const PREVIEW_URL_EXPIRY_SECONDS = 3600; // 1 hour
@@ -31,41 +38,11 @@ const SHARE_DOWNLOAD_RATE_WINDOW_SECONDS = 60;
 const SHARE_TOKEN_RATE_LIMIT = 12;
 const SHARE_TOKEN_RATE_WINDOW_SECONDS = 60;
 
-// ─── Lazy DB singleton ────────────────────────────────────────────────────────
-let _db: ReturnType<typeof createDb> | null = null;
-
-function getDb() {
-  if (!_db) _db = createDb();
-  return _db;
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-/**
- * Pseudonymise an IP address for download event logging.
- * PRD §8.2: Never store plaintext IPs for anonymous operations.
- */
-async function hashIp(raw?: string): Promise<string | null> {
-  if (!raw) return null;
-  const firstIp = raw.split(',')[0];
-  if (!firstIp) return null;
-  const data = new TextEncoder().encode(firstIp.trim());
-  const digest = await crypto.subtle.digest('SHA-256', data);
-  return Buffer.from(digest).toString('hex').slice(0, 32);
-}
-
-function errorBody(code: string, message: string) {
-  return { ok: false as const, error: { code, message } };
-}
-
-function parseShareToken(token: string): string | null {
-  const parsed = shareTokenParamsSchema.safeParse({ token });
-  if (!parsed.success) {
-    return null;
-  }
-
-  return parsed.data.token;
-}
+// ─── Shared helpers (delegated to route-support layer) ────────────────────────
+const hashIp = sharedHashIp;
+const errorBody = sharedErrorBody;
+const parseShareToken = sharedParseShareToken;
+const getDb = sharedGetDb;
 
 /**
  * Map a file status to the most specific API error code.
@@ -174,7 +151,11 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
             count: limit.count,
             resetInSeconds: limit.resetInSeconds
           });
-          recordRateLimitBlocked(resolveGetRedis(), 'share_metadata').catch(() => {});
+          recordBlockedMetricBestEffort(
+            recordRateLimitBlocked(resolveGetRedis(), 'share_metadata'),
+            'share_metadata',
+            logger
+          );
           return c.json(
             errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
             429
@@ -200,7 +181,11 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
             count: tokenLimit.count,
             resetInSeconds: tokenLimit.resetInSeconds
           });
-          recordRateLimitBlocked(resolveGetRedis(), 'share_metadata_token').catch(() => {});
+          recordBlockedMetricBestEffort(
+            recordRateLimitBlocked(resolveGetRedis(), 'share_metadata_token'),
+            'share_metadata_token',
+            logger
+          );
           return c.json(
             errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
             429
@@ -328,7 +313,11 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
             count: limit.count,
             resetInSeconds: limit.resetInSeconds
           });
-          recordRateLimitBlocked(resolveGetRedis(), 'download').catch(() => {});
+          recordBlockedMetricBestEffort(
+            recordRateLimitBlocked(resolveGetRedis(), 'download'),
+            'download',
+            logger
+          );
           return c.json(
             errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
             429
@@ -353,7 +342,11 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
             count: tokenLimit.count,
             resetInSeconds: tokenLimit.resetInSeconds
           });
-          recordRateLimitBlocked(resolveGetRedis(), 'download_token').catch(() => {});
+          recordBlockedMetricBestEffort(
+            recordRateLimitBlocked(resolveGetRedis(), 'download_token'),
+            'download_token',
+            logger
+          );
           return c.json(
             errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
             429
@@ -404,10 +397,18 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
         reason: 'expired_by_timestamp'
       });
 
-      resolveDb()
-        .insert(downloadEvents)
-        .values({ fileId: file.id, eventType: 'blocked', ipHash })
-        .catch(() => {});
+      persistEventBestEffort(
+        resolveDb()
+          .insert(downloadEvents)
+          .values({ fileId: file.id, eventType: 'blocked', ipHash }),
+        {
+          event: 'download_blocked',
+          requestId,
+          entity: { type: 'file', id: token },
+          eventType: 'blocked'
+        },
+        logger
+      );
 
       return c.json(errorBody(API_ERROR_CODES.FILE_EXPIRED, 'This file has expired'), 410);
     }
@@ -425,10 +426,18 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
         reason: file.status
       });
 
-      resolveDb()
-        .insert(downloadEvents)
-        .values({ fileId: file.id, eventType: 'blocked', ipHash })
-        .catch(() => {});
+      persistEventBestEffort(
+        resolveDb()
+          .insert(downloadEvents)
+          .values({ fileId: file.id, eventType: 'blocked', ipHash }),
+        {
+          event: 'download_blocked',
+          requestId,
+          entity: { type: 'file', id: token },
+          eventType: 'blocked'
+        },
+        logger
+      );
 
       return c.json(errorBody(code, message), 410);
     }
@@ -514,16 +523,24 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
       });
     }
 
-    // Record the download_started event (best-effort; does not block delivery).
-    resolveDb()
-      .insert(downloadEvents)
-      .values({
-        fileId: file.id,
-        eventType: 'started',
-        ipHash,
-        context: { oneTime: file.oneTimeDownload }
-      })
-      .catch(() => {});
+    // Record the download_started event (non-blocking; failures are logged).
+    persistEventBestEffort(
+      resolveDb()
+        .insert(downloadEvents)
+        .values({
+          fileId: file.id,
+          eventType: 'started',
+          ipHash,
+          context: { oneTime: file.oneTimeDownload }
+        }),
+      {
+        event: 'download.started',
+        requestId,
+        entity: { type: 'file', id: token },
+        eventType: 'started'
+      },
+      logger
+    );
 
     // ── Generate presigned download URL ───────────────────────────────────────
     let downloadUrl: string;
@@ -585,19 +602,27 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
     // Presigned URL issuance is the reliable backend delivery point for both
     // standard and one-time downloads. Record completion here so telemetry does
     // not depend on a best-effort client callback.
-    resolveDb()
-      .insert(downloadEvents)
-      .values({
-        fileId: file.id,
-        eventType: 'completed',
-        ipHash,
-        context: {
-          oneTime: file.oneTimeDownload,
-          deliveredViaPresignedUrl: true,
-          source: 'presign_issued'
-        }
-      })
-      .catch(() => {});
+    persistEventBestEffort(
+      resolveDb()
+        .insert(downloadEvents)
+        .values({
+          fileId: file.id,
+          eventType: 'completed',
+          ipHash,
+          context: {
+            oneTime: file.oneTimeDownload,
+            deliveredViaPresignedUrl: true,
+            source: 'presign_issued'
+          }
+        }),
+      {
+        event: 'download.completed',
+        requestId,
+        entity: { type: 'file', id: token },
+        eventType: 'completed'
+      },
+      logger
+    );
 
     logger.info('Download delivered via presigned URL', {
       event: 'download.completed',
@@ -678,7 +703,11 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
               count: limit.count,
               resetInSeconds: limit.resetInSeconds
             });
-            recordRateLimitBlocked(resolveGetRedis(), 'preview').catch(() => {});
+            recordBlockedMetricBestEffort(
+              recordRateLimitBlocked(resolveGetRedis(), 'preview'),
+              'preview',
+              logger
+            );
             return c.json(
               errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
               429
@@ -703,7 +732,11 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
               count: tokenLimit.count,
               resetInSeconds: tokenLimit.resetInSeconds
             });
-            recordRateLimitBlocked(resolveGetRedis(), 'preview_token').catch(() => {});
+            recordBlockedMetricBestEffort(
+              recordRateLimitBlocked(resolveGetRedis(), 'preview_token'),
+              'preview_token',
+              logger
+            );
             return c.json(
               errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
               429

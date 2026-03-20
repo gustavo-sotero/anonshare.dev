@@ -22,6 +22,7 @@ This document consolidates the working conventions established in Module 1 so la
 
 - A single root `.env` file configures all executable processes.
 - The same root `.env` is used for local Docker Compose infrastructure defaults.
+- CI and deployed processes must keep the same variable names even when each process receives its values independently from the host platform.
 - API and worker boot fail fast on missing required runtime variables.
 - Web runtime entrypoints validate env, while the production build stays resilient enough to compile without private runtime secrets.
 - Root operational scripts derive local connection URLs from the root `.env` instead of maintaining a separate migration-only config.
@@ -39,6 +40,7 @@ This document consolidates the working conventions established in Module 1 so la
 
 - `bun run infra:up` starts PostgreSQL, Redis, and MinIO.
 - `bun run infra:check` validates application-facing connectivity, not just container health.
+- `bun run verify:bullmq` enforces API/worker BullMQ version parity from the workspace root.
 - `bun run verify` is the root quality gate before merging or handing off work.
 - `bun run db:generate` and `bun run db:migrate` are the only supported entrypoints for Drizzle tooling.
 
@@ -62,3 +64,18 @@ Additional rules:
 - Module 1 establishes topology, bootstrap, shared infrastructure, and governance only.
 - Placeholder routes and handlers are acceptable when the corresponding product behavior is explicitly deferred to a later module.
 - New module work should extend the existing shells and boundaries instead of bypassing them.
+
+## Large Module Decomposition
+
+When a route file or feature module grows beyond ~500 lines, extract supporting code into a co-located directory:
+
+- Shared types and constants → `types.ts`
+- Pure helper functions → `helpers.ts`
+- Auth/session concerns → `session.ts`
+- Database queries → `queries.ts`
+- Feature-specific infrastructure → dedicated file (e.g. `queue-health.ts`, `transport.ts`)
+- Router factory and route handlers → `index.ts`
+
+The directory name must match the original file's import path so that existing `import { ... } from './module'` statements continue to resolve without changes.
+
+For TanStack Router routes, prefer route-level `validateSearch` and loaders for typed search parsing and initial data bootstrap. Avoid mount-only Effects whose only purpose is to interpret URL search params or perform the first request that the router can own directly.

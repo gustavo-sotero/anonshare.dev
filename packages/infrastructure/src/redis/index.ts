@@ -14,7 +14,9 @@ let _client: Redis | null = null;
 /**
  * Returns a shared Redis client.
  * The connection is established lazily on first call.
- * Used by BullMQ, rate-limiter and cache helpers.
+ * Used by rate limiting, OAuth pending-state storage, and admin metrics.
+ * BullMQ creates its own producer/worker connections through
+ * `@anonshare/infrastructure/queue` so queue lifecycle ownership stays explicit.
  */
 export function getRedisClient(): Redis {
   if (!_client) {

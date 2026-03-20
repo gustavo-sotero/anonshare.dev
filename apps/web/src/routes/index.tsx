@@ -2,6 +2,7 @@ import { MAX_FILE_SIZE_BYTES } from '@anonshare/domain';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { useCallback, useRef, useState } from 'react';
 import { SiteFrame } from '~/components/site-frame';
+import { formatDateDeterministic } from '~/share/date-format';
 
 export const Route = createFileRoute('/')({
   head: () => ({
@@ -110,7 +111,7 @@ function uploadFile(
 
 // ─── component ────────────────────────────────────────────────────────────────
 
-function HomePage() {
+export function HomePage() {
   const [phase, setPhase] = useState<UploadPhase>({ kind: 'idle' });
   const [oneTime, setOneTime] = useState(false);
   const [allowPreview, setAllowPreview] = useState(false);
@@ -237,13 +238,7 @@ function HomePage() {
           </div>
 
           {phase.expiresAt && (
-            <p className="upload-meta-note">
-              Expires{' '}
-              {new Date(phase.expiresAt).toLocaleString(undefined, {
-                dateStyle: 'medium',
-                timeStyle: 'short'
-              })}
-            </p>
+            <p className="upload-meta-note">Expires {formatDateDeterministic(phase.expiresAt)}</p>
           )}
 
           <button type="button" className="upload-reset-link" onClick={reset}>
@@ -323,7 +318,9 @@ function HomePage() {
               {/* One-time download */}
               <label className="option-row">
                 <div className="option-row__text">
-                  <span className="option-row__name">One-time download</span>
+                  <span id="switch-one-time-label" className="option-row__name">
+                    One-time download
+                  </span>
                   <span className="option-row__desc">
                     The link stops working after the first download.
                   </span>
@@ -332,6 +329,7 @@ function HomePage() {
                   type="button"
                   role="switch"
                   aria-checked={oneTime}
+                  aria-labelledby="switch-one-time-label"
                   className={`toggle${oneTime ? ' toggle--on' : ''}`}
                   onClick={() => handleOneTimeChange(!oneTime)}
                 >
@@ -342,7 +340,9 @@ function HomePage() {
               {/* Allow preview */}
               <label className={`option-row${oneTime ? ' option-row--disabled' : ''}`}>
                 <div className="option-row__text">
-                  <span className="option-row__name">Allow preview</span>
+                  <span id="switch-preview-label" className="option-row__name">
+                    Allow preview
+                  </span>
                   <span className="option-row__desc">
                     {oneTime
                       ? 'Preview is incompatible with one-time download.'
@@ -353,6 +353,7 @@ function HomePage() {
                   type="button"
                   role="switch"
                   aria-checked={allowPreview}
+                  aria-labelledby="switch-preview-label"
                   disabled={oneTime}
                   className={`toggle${allowPreview && !oneTime ? ' toggle--on' : ''}${oneTime ? ' toggle--locked' : ''}`}
                   onClick={() => {

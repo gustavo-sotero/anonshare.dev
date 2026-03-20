@@ -2,7 +2,7 @@
 
 Anonymous file sharing. Upload, share, done.
 
-> Portfolio project. Non-commercial R&D. The running app now includes foundation routes for `/about`, `/admin`, and `/share/demo-token`, while the full architecture notes remain in `docs/architecture.md`.
+> Portfolio project. Non-commercial R&D. The running app includes upload, share, download, preview, one-time download, expiration lifecycle, reporting, admin dashboard with GitHub OAuth, and a dedicated about page. Architecture notes remain in `docs/architecture.md`.
 
 Foundation decisions and process boundaries are documented in `docs/architecture.md`.
 
@@ -101,9 +101,8 @@ Copy-Item .env.example .env
 
 Fill in `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_ALLOWED_USER_ID` and `SESSION_SECRET` in the root `.env`.
 
-All processes (`web`, `api`, `worker`) load variables from this same root `.env`.
-
-The per-app `.env.example` files are deprecated and kept only for compatibility.
+All local processes (`web`, `api`, `worker`) load variables from this same root `.env`.
+In CI and production, inject the same variable names through the platform environment or secret manager instead of maintaining separate per-process env contracts.
 
 If `docker compose up -d` fails with a Docker named pipe error on Windows, start Docker Desktop first and rerun the command.
 
@@ -156,6 +155,7 @@ bun run --cwd apps/web dev
 | `bun run infra:down` | Stop Docker services (keep volumes) |
 | `bun run infra:check` | Verify local PostgreSQL, Redis, and MinIO connectivity |
 | `bun run infra:reset` | Stop + destroy volumes + restart (full local reset) |
+| `bun run verify:bullmq` | Ensure the API and worker resolve the same BullMQ version |
 
 ---
 
@@ -183,6 +183,7 @@ This destroys named Docker volumes. All uploaded files and schema data are lost.
 - **Imports**: use package aliases (`@anonshare/domain`, `@anonshare/contracts`, etc.) — not deep relative paths.
 - **Packages vs Apps**: `packages/` are libraries with no runtime entry point. `apps/` are executable processes.
 - **Environment**: all processes read from the single root `.env`. Variables are validated at boot — missing required vars crash immediately with a clear message.
+- **Production env injection**: deploy processes may receive variables independently, but they must use the same canonical variable names documented in `docs/deploy.md`; do not invent per-process env models.
 - **Readiness**: `bun run infra:check` validates local dependencies before app startup, and the API `GET /health` route reuses the same shared health probes at runtime.
 - **Infrastructure config**: the root `.env` controls local PostgreSQL, Redis and MinIO credentials/ports used by Docker Compose.
 - **Database tooling**: root Drizzle commands derive local connection settings from the root `.env` so operational scripts and Docker Compose stay aligned.
@@ -199,12 +200,12 @@ This destroys named Docker volumes. All uploaded files and schema data are lost.
 
 ## Module roadmap
 
-1. ✅ **Module 1** — Monorepo foundation *(this commit)*
-2. **Module 2** — Domain model, contracts, database schema
-3. **Module 3** — Upload pipeline + storage integration
-4. **Module 4** — Public share, download, preview flows
-5. **Module 5** — Expiration, cleanup, reconciliation
-6. **Module 6** — Abuse prevention, reports, auto-moderation
-7. **Module 7** — GitHub auth, admin dashboard
-8. **Module 8** — About page + portfolio narrative
-9. **Module 9** — Observability, tests, CI, production hardening
+1. ✅ **Module 1** — Monorepo foundation
+2. ✅ **Module 2** — Domain model, contracts, database schema
+3. ✅ **Module 3** — Upload pipeline + storage integration
+4. ✅ **Module 4** — Public share, download, preview flows
+5. ✅ **Module 5** — Expiration, cleanup, reconciliation
+6. ✅ **Module 6** — Abuse prevention, reports, auto-moderation
+7. ✅ **Module 7** — GitHub auth, admin dashboard
+8. ✅ **Module 8** — About page + portfolio narrative
+9. ✅ **Module 9** — Observability, tests, CI, production hardening

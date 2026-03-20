@@ -104,6 +104,9 @@ jobs:
       - name: Validate infrastructure dependencies
         run: bun packages/infrastructure/src/scripts/check-local-platform.ts
 
+      - name: Check BullMQ version consistency
+        run: bun run verify:bullmq
+
       - name: Typecheck
         run: bun run typecheck
 

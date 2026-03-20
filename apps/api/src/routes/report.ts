@@ -1,6 +1,6 @@
-import { API_ERROR_CODES, reportRequestSchema, shareTokenParamsSchema } from '@anonshare/contracts';
+import { API_ERROR_CODES, reportRequestSchema } from '@anonshare/contracts';
 import { loadSystemSettingOrDefault } from '@anonshare/infrastructure/config';
-import { createDb } from '@anonshare/infrastructure/db';
+import type { createDb } from '@anonshare/infrastructure/db';
 import { fileModerationActions, files, reports } from '@anonshare/infrastructure/db/schema';
 import { checkRateLimit, recordRateLimitBlocked } from '@anonshare/infrastructure/rate-limit';
 import type { Redis } from '@anonshare/infrastructure/redis';
@@ -8,6 +8,13 @@ import { getRedisClient } from '@anonshare/infrastructure/redis';
 import { and, eq, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { logger } from '../logger';
+import {
+  errorBody,
+  hashIp,
+  parseShareToken,
+  recordBlockedMetricBestEffort,
+  getDb as sharedGetDb
+} from './support';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const REPORT_RATE_WINDOW_SECONDS = 3600;
@@ -19,13 +26,7 @@ const REPORT_PER_FILE_RATE_LIMIT = 3;
 const HIDDEN_STATUSES = new Set(['hidden', 'deleted']);
 const UNREPORTABLE_STATUSES = new Set(['pending_upload', 'missing']);
 
-// ─── Lazy DB singleton ────────────────────────────────────────────────────────
-let _db: ReturnType<typeof createDb> | null = null;
-
-function getDb() {
-  if (!_db) _db = createDb();
-  return _db;
-}
+const getDb = sharedGetDb;
 
 // ─── Types (injectable for tests) ────────────────────────────────────────────
 export type ReportRouterDeps = {
@@ -35,26 +36,6 @@ export type ReportRouterDeps = {
   loadReportRateLimit?: () => Promise<number>;
   loadAutoHideThreshold?: () => Promise<number>;
 };
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-async function hashIp(raw?: string): Promise<string | null> {
-  if (!raw) return null;
-  const firstIp = raw.split(',')[0];
-  if (!firstIp) return null;
-  const data = new TextEncoder().encode(firstIp.trim());
-  const digest = await crypto.subtle.digest('SHA-256', data);
-  return Buffer.from(digest).toString('hex').slice(0, 32);
-}
-
-function errorBody(code: string, message: string) {
-  return { ok: false as const, error: { code, message } };
-}
-
-function parseShareToken(token: string): string | null {
-  const parsed = shareTokenParamsSchema.safeParse({ token });
-  return parsed.success ? parsed.data.token : null;
-}
 
 // ─── Router factory ───────────────────────────────────────────────────────────
 
@@ -110,7 +91,7 @@ export function createReportRouter(deps: ReportRouterDeps = {}): Hono {
             count: globalLimit.count,
             resetInSeconds: globalLimit.resetInSeconds
           });
-          recordRateLimitBlocked(redis, 'report').catch(() => {});
+          recordBlockedMetricBestEffort(recordRateLimitBlocked(redis, 'report'), 'report', logger);
           return c.json(
             errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many reports. Please try again later.'),
             429
@@ -136,7 +117,11 @@ export function createReportRouter(deps: ReportRouterDeps = {}): Hono {
             count: fileLimit.count,
             resetInSeconds: fileLimit.resetInSeconds
           });
-          recordRateLimitBlocked(redis, 'report_per_file').catch(() => {});
+          recordBlockedMetricBestEffort(
+            recordRateLimitBlocked(redis, 'report_per_file'),
+            'report_per_file',
+            logger
+          );
           return c.json(
             errorBody(
               API_ERROR_CODES.RATE_LIMITED,

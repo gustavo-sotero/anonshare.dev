@@ -1,10 +1,15 @@
 import { adminLoginCallbackSchema } from '@anonshare/contracts';
+import type { OAuthStateRepository } from '@anonshare/infrastructure/auth';
+import { createOAuthStateRepository } from '@anonshare/infrastructure/auth';
 import { app as appConfig, auth as authConfig } from '@anonshare/infrastructure/config';
 import { createDb } from '@anonshare/infrastructure/db';
 import { adminSessions } from '@anonshare/infrastructure/db/schema';
+import type { Redis } from '@anonshare/infrastructure/redis';
+import { getRedisClient } from '@anonshare/infrastructure/redis';
 import { eq } from 'drizzle-orm';
 import { type Context, Hono } from 'hono';
 import { logger } from '../logger';
+import { getRequestId, readCookieValue } from './support';
 
 const ADMIN_SESSION_COOKIE_NAME = 'anonshare_admin_session';
 const SESSION_DURATION_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -13,57 +18,11 @@ const GITHUB_AUTHORIZE_URL = 'https://github.com/login/oauth/authorize';
 const GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 const GITHUB_USER_URL = 'https://api.github.com/user';
 
-type OAuthStateEntry = {
-  createdAt: number;
-  redirectTo: string;
-};
-
-// In-memory state store. Acceptable for single-instance admin auth.
-const pendingOAuthStates = new Map<string, OAuthStateEntry>();
-
 function generateOAuthState(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
   const base64 = btoa(String.fromCodePoint(...bytes));
   return base64.replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
-}
-
-function pruneExpiredStates(nowMs: number): void {
-  for (const [state, entry] of pendingOAuthStates) {
-    if (nowMs - entry.createdAt > OAUTH_STATE_TTL_MS) {
-      pendingOAuthStates.delete(state);
-    }
-  }
-}
-
-function getRequestId(c: Context): string {
-  return c.req.header('x-request-id') ?? crypto.randomUUID();
-}
-
-function readCookieValue(cookieHeader: string | undefined, name: string): string | null {
-  if (!cookieHeader) {
-    return null;
-  }
-
-  for (const part of cookieHeader.split(';')) {
-    const [rawName, ...rest] = part.trim().split('=');
-    if (rawName !== name || rest.length === 0) {
-      continue;
-    }
-
-    const rawValue = rest.join('=');
-    if (!rawValue) {
-      return null;
-    }
-
-    try {
-      return decodeURIComponent(rawValue);
-    } catch {
-      return rawValue;
-    }
-  }
-
-  return null;
 }
 
 function buildSessionCookie(
@@ -141,15 +100,26 @@ export type AuthRouterDeps = {
   now?: () => Date;
   exchangeCodeForToken?: (code: string) => Promise<GitHubTokenResponse>;
   fetchGitHubUser?: (accessToken: string) => Promise<GitHubUserResponse>;
+  oauthStateRepo?: OAuthStateRepository;
+  getRedis?: () => Redis;
 };
 
 let _db: ReturnType<typeof createDb> | null = null;
 
-function getDb() {
+function defaultGetDb() {
   if (!_db) {
     _db = createDb();
   }
   return _db;
+}
+
+let _oauthStateRepo: OAuthStateRepository | null = null;
+
+function defaultGetOAuthStateRepo(): OAuthStateRepository {
+  if (!_oauthStateRepo) {
+    _oauthStateRepo = createOAuthStateRepository(getRedisClient());
+  }
+  return _oauthStateRepo;
 }
 
 async function defaultExchangeCodeForToken(code: string): Promise<GitHubTokenResponse> {
@@ -206,7 +176,7 @@ async function defaultFetchGitHubUser(accessToken: string): Promise<GitHubUserRe
 
 export function createAuthRouter(deps: AuthRouterDeps = {}): Hono {
   const resolvedDeps = {
-    getDb: deps.getDb ?? getDb,
+    getDb: deps.getDb ?? defaultGetDb,
     getGithubClientId: deps.getGithubClientId ?? authConfig.githubClientId,
     getGithubClientSecret: deps.getGithubClientSecret ?? authConfig.githubClientSecret,
     getAllowedGithubUserId: deps.getAllowedGithubUserId ?? authConfig.githubAllowedUserId,
@@ -218,6 +188,10 @@ export function createAuthRouter(deps: AuthRouterDeps = {}): Hono {
     fetchGitHubUser: deps.fetchGitHubUser ?? defaultFetchGitHubUser
   };
 
+  function getOAuthStateRepo(): OAuthStateRepository {
+    return deps.oauthStateRepo ?? defaultGetOAuthStateRepo();
+  }
+
   const router = new Hono();
 
   router.use('*', async (c, next) => {
@@ -228,17 +202,13 @@ export function createAuthRouter(deps: AuthRouterDeps = {}): Hono {
   // ─── GET /auth/login ─────────────────────────────────────────────────────
   // Initiates the GitHub OAuth flow. Returns the authorization URL and state
   // for the client to redirect the browser.
-  router.get('/login', (c) => {
+  router.get('/login', async (c) => {
     const requestId = getRequestId(c);
-    const nowMs = resolvedDeps.now().getTime();
-
-    // Prune expired states on each login initiation
-    pruneExpiredStates(nowMs);
 
     const state = generateOAuthState();
     const redirectTo = sanitizeAdminRedirectTarget(c.req.query('redirect'));
 
-    pendingOAuthStates.set(state, { createdAt: nowMs, redirectTo });
+    await getOAuthStateRepo().create(state, redirectTo, OAUTH_STATE_TTL_MS);
 
     const clientId = resolvedDeps.getGithubClientId();
     const baseUrl = resolvedDeps.getAppBaseUrl();
@@ -270,9 +240,6 @@ export function createAuthRouter(deps: AuthRouterDeps = {}): Hono {
   // redirects to admin dashboard.
   router.get('/callback', async (c) => {
     const requestId = getRequestId(c);
-    const nowMs = resolvedDeps.now().getTime();
-
-    pruneExpiredStates(nowMs);
 
     const code = c.req.query('code');
     const state = c.req.query('state');
@@ -291,32 +258,17 @@ export function createAuthRouter(deps: AuthRouterDeps = {}): Hono {
       return c.redirect(`${resolvedDeps.getAppBaseUrl()}/admin?error=invalid_callback`);
     }
 
-    // Validate state to prevent CSRF
-    const stateEntry = pendingOAuthStates.get(parsed.data.state);
+    // Atomically consume the state token (single-use, TTL-protected, restart-safe).
+    // Returns null if the state was never set, already consumed, or expired.
+    const stateEntry = await getOAuthStateRepo().consume(parsed.data.state);
     if (!stateEntry) {
-      logger.warn('Admin OAuth callback: state mismatch or expired', {
+      logger.warn('Admin OAuth callback: state mismatch, expired, or already consumed', {
         event: 'admin.login_denied',
         requestId,
         actor: 'admin',
         entity: { type: 'oauth', id: 'github' },
         outcome: 'failure',
         reason: 'state_mismatch'
-      });
-      return c.redirect(`${resolvedDeps.getAppBaseUrl()}/admin?error=state_expired`);
-    }
-
-    // Consume the state token (single use)
-    pendingOAuthStates.delete(parsed.data.state);
-
-    // Check if state is expired
-    if (nowMs - stateEntry.createdAt > OAUTH_STATE_TTL_MS) {
-      logger.warn('Admin OAuth callback: state expired', {
-        event: 'admin.login_denied',
-        requestId,
-        actor: 'admin',
-        entity: { type: 'oauth', id: 'github' },
-        outcome: 'failure',
-        reason: 'state_expired'
       });
       return c.redirect(`${resolvedDeps.getAppBaseUrl()}/admin?error=state_expired`);
     }

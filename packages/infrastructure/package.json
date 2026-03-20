@@ -11,7 +11,9 @@
     "./storage": "./src/storage/index.ts",
     "./health": "./src/health/index.ts",
     "./logger": "./src/logger/index.ts",
-    "./config": "./src/config/index.ts"
+    "./config": "./src/config/index.ts",
+    "./queue": "./src/queue/index.ts",
+    "./auth": "./src/auth/index.ts"
   },
   "scripts": {
     "test": "bun test",

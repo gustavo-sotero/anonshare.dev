@@ -5,6 +5,7 @@ import type {
 } from '@anonshare/contracts';
 import { validateWorkerEnv } from '@anonshare/infrastructure/config';
 import { createDb } from '@anonshare/infrastructure/db';
+import { getWorkerConnectionConfig } from '@anonshare/infrastructure/queue';
 import { closeRedisClient } from '@anonshare/infrastructure/redis';
 import { storageAdapter } from '@anonshare/infrastructure/storage';
 import { Queue, Worker } from 'bullmq';
@@ -32,9 +33,11 @@ const healthServer = startWorkerHealthServer({
   port: config.healthPort
 });
 
-// Pass the URL directly so BullMQ creates its own ioredis connection,
-// avoiding version-mismatch conflicts with the infrastructure package's client.
-const connection = { url: config.redisUrl };
+// Use canonical worker connection config from infrastructure so all worker
+// processes share the same connection policy. BullMQ creates its own ioredis
+// connection from the URL, avoiding version-mismatch conflicts with the
+// infrastructure package's shared client.
+const connection = getWorkerConnectionConfig();
 
 // ─── Shared dependencies ──────────────────────────────────────────────────────
 

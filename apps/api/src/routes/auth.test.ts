@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { adminLoginStartResponseSchema } from '@anonshare/contracts';
+import type { OAuthStateRepository } from '@anonshare/infrastructure/auth';
 import type { createDb } from '@anonshare/infrastructure/db';
 import { Hono } from 'hono';
 import { type AuthRouterDeps, createAuthRouter } from './auth';
@@ -28,6 +29,43 @@ function buildDb(insertResult: DbInsertResult = [{ id: SESSION_ID }]): ReturnTyp
   } as unknown as ReturnType<typeof createDb>;
 }
 
+/**
+ * In-memory OAuthStateRepository that behaves like the Redis-backed
+ * implementation but runs entirely in-process. Supports TTL and atomic consume.
+ */
+function createInMemoryOAuthStateRepo(): OAuthStateRepository {
+  const store = new Map<
+    string,
+    { data: { redirectTo: string; createdAt: number }; expiresAt: number }
+  >();
+
+  return {
+    async create(state, redirectTo, ttlMs) {
+      store.set(state, {
+        data: { redirectTo, createdAt: Date.now() },
+        expiresAt: Date.now() + ttlMs
+      });
+    },
+    async read(state) {
+      const entry = store.get(state);
+      if (!entry || Date.now() > entry.expiresAt) {
+        if (entry) store.delete(state);
+        return null;
+      }
+      return entry.data;
+    },
+    async consume(state) {
+      const entry = store.get(state);
+      if (!entry || Date.now() > entry.expiresAt) {
+        if (entry) store.delete(state);
+        return null;
+      }
+      store.delete(state);
+      return entry.data;
+    }
+  };
+}
+
 function buildDeps(overrides: Partial<AuthRouterDeps> = {}): AuthRouterDeps {
   return {
     getDb: () => buildDb(),
@@ -47,6 +85,7 @@ function buildDeps(overrides: Partial<AuthRouterDeps> = {}): AuthRouterDeps {
       id: Number(ALLOWED_GITHUB_ID),
       login: ALLOWED_GITHUB_LOGIN
     }),
+    oauthStateRepo: createInMemoryOAuthStateRepo(),
     ...overrides
   };
 }
@@ -388,5 +427,55 @@ describe('POST /admin/auth/logout', () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toEqual({ ok: true });
+  });
+});
+
+// ─── Restart-safe OAuth state ─────────────────────────────────────────────────
+
+describe('OAuth state durability across router instances', () => {
+  test('state created by one router instance can be consumed by a second instance (restart-safe)', async () => {
+    const sharedRepo = createInMemoryOAuthStateRepo();
+
+    // Router instance 1 starts the login
+    const app1 = new Hono();
+    app1.route('/admin/auth', createAuthRouter(buildDeps({ oauthStateRepo: sharedRepo })));
+    const login = await initiateLogin(app1);
+
+    // Router instance 2 handles the callback (simulates API restart)
+    const app2 = new Hono();
+    app2.route('/admin/auth', createAuthRouter(buildDeps({ oauthStateRepo: sharedRepo })));
+
+    const response = await app2.request(
+      `http://localhost/admin/auth/callback?code=github_code_123&state=${encodeURIComponent(login.state)}`
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).not.toContain('error=');
+  });
+
+  test('state is consumed atomically and cannot be replayed across instances', async () => {
+    const sharedRepo = createInMemoryOAuthStateRepo();
+
+    const app1 = new Hono();
+    app1.route('/admin/auth', createAuthRouter(buildDeps({ oauthStateRepo: sharedRepo })));
+    const login = await initiateLogin(app1);
+
+    // First callback succeeds on a fresh instance
+    const app2 = new Hono();
+    app2.route('/admin/auth', createAuthRouter(buildDeps({ oauthStateRepo: sharedRepo })));
+    const first = await app2.request(
+      `http://localhost/admin/auth/callback?code=github_code_123&state=${encodeURIComponent(login.state)}`
+    );
+    expect(first.status).toBe(302);
+    expect(first.headers.get('location')).not.toContain('error=');
+
+    // Replay on yet another instance must be rejected (state already consumed)
+    const app3 = new Hono();
+    app3.route('/admin/auth', createAuthRouter(buildDeps({ oauthStateRepo: sharedRepo })));
+    const second = await app3.request(
+      `http://localhost/admin/auth/callback?code=github_code_123&state=${encodeURIComponent(login.state)}`
+    );
+    expect(second.status).toBe(302);
+    expect(second.headers.get('location')).toContain('error=state_expired');
   });
 });

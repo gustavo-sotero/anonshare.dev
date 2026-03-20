@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 
 export type RequestTracker = {
   activate: () => void;
-  beginRequest: () => () => boolean;
+  beginRequest: () => { isCurrent: () => boolean; signal: AbortSignal };
   dispose: () => void;
 };
 
@@ -10,6 +10,7 @@ export function createRequestTracker(): RequestTracker {
   let active = true;
   let lifecycleId = 0;
   let latestRequestId = 0;
+  let currentController: AbortController | null = null;
 
   return {
     activate() {
@@ -17,30 +18,41 @@ export function createRequestTracker(): RequestTracker {
       active = true;
     },
     beginRequest() {
+      // Abort any in-flight request before starting a new one
+      currentController?.abort();
+
       latestRequestId += 1;
       const requestId = latestRequestId;
       const requestLifecycleId = lifecycleId;
+      const controller = new AbortController();
+      currentController = controller;
 
-      return () => active && lifecycleId === requestLifecycleId && latestRequestId === requestId;
+      return {
+        isCurrent: () =>
+          active && lifecycleId === requestLifecycleId && latestRequestId === requestId,
+        signal: controller.signal
+      };
     },
     dispose() {
       lifecycleId += 1;
       active = false;
+      currentController?.abort();
+      currentController = null;
     }
   };
 }
 
 export async function runTrackedRequest<T>(params: {
   tracker: RequestTracker;
-  run: () => Promise<T>;
+  run: (signal: AbortSignal) => Promise<T>;
   onSuccess: (value: T) => void;
   onError?: (error: unknown) => void;
   onFinally?: () => void;
 }): Promise<void> {
-  const isCurrent = params.tracker.beginRequest();
+  const { isCurrent, signal } = params.tracker.beginRequest();
 
   try {
-    const value = await params.run();
+    const value = await params.run(signal);
 
     if (!isCurrent()) {
       return;
@@ -49,6 +61,11 @@ export async function runTrackedRequest<T>(params: {
     params.onSuccess(value);
   } catch (error) {
     if (!isCurrent()) {
+      return;
+    }
+
+    // Swallow abort errors — they are expected when a newer request supersedes
+    if (error instanceof DOMException && error.name === 'AbortError') {
       return;
     }
 

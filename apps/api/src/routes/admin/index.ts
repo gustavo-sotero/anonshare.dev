@@ -1,4 +1,3 @@
-import type { OperationalAnomalySeverity } from '@anonshare/contracts';
 import {
   adminFileListQuerySchema,
   adminReportListQuerySchema,
@@ -6,806 +5,52 @@ import {
   resolveReportSchema
 } from '@anonshare/contracts';
 import { auth as authConfig } from '@anonshare/infrastructure/config';
-import { createDb } from '@anonshare/infrastructure/db';
 import {
-  adminSessions,
   downloadEvents,
   fileModerationActions,
   files,
-  operationalAnomalies,
   reports
 } from '@anonshare/infrastructure/db/schema';
+import { storageAdapter } from '@anonshare/infrastructure/storage';
+import { and, count, desc, eq, gte, inArray } from 'drizzle-orm';
+import { Hono } from 'hono';
+import { logger } from '../../logger';
+import { getDb as getDbShared, getRequestId } from '../support';
 import {
-  listRateLimitBlockedCountsByDay,
-  RATE_LIMIT_BLOCKED_METRIC_SURFACES
-} from '@anonshare/infrastructure/rate-limit';
-import { getRedisClient } from '@anonshare/infrastructure/redis';
-import { type StorageHeadObject, storageAdapter } from '@anonshare/infrastructure/storage';
-import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
-import { type Context, Hono } from 'hono';
-import { logger } from '../logger';
+  buildDailySeries,
+  clampAnomalyLimit,
+  getAnomalySeverity,
+  getReportUrgency,
+  getReportUrgencyReasonFilter,
+  normalizeAnomalyDetails,
+  resolveRestoredFileStatus,
+  setNoStoreHeaders,
+  startOfUtcDay
+} from './helpers';
 import {
-  enqueueCleanupFileJob,
-  getCleanupQueue,
-  getExpireQueue,
-  getReconcileQueue
-} from '../queues';
-
-const ADMIN_SESSION_COOKIE_NAME = 'anonshare_admin_session';
-const DEFAULT_ANOMALY_LIMIT = 50;
-const MAX_ANOMALY_LIMIT = 200;
-const DAY_IN_MS = 24 * 60 * 60 * 1000;
-const FILE_DETAIL_REPORT_LIMIT = 100;
-const FILE_DETAIL_MODERATION_HISTORY_LIMIT = 100;
-
-const HIGH_URGENCY_REPORT_REASONS = ['illegal_content', 'malware'] as const;
-const MEDIUM_URGENCY_REPORT_REASONS = ['copyright_violation', 'spam'] as const;
-const LOW_URGENCY_REPORT_REASONS = ['other'] as const;
-
-type LifecycleQueueName = 'expire-file' | 'cleanup-file' | 'reconcile';
-
-type SessionRecord = {
-  id: string;
-  githubId: string;
-  githubLogin: string;
-  expiresAt: Date;
-  revokedAt: Date | null;
-};
-
-type AnomalyRecord = {
-  id: string;
-  type: typeof operationalAnomalies.$inferSelect.type;
-  fileId: string | null;
-  details: unknown;
-  detectedAt: Date;
-  resolvedAt: Date | null;
-  resolution: string | null;
-};
-
-type AnomalyCountRecord = {
-  type: typeof operationalAnomalies.$inferSelect.type;
-  count: number;
-};
-
-type ReportStatusCountRecord = {
-  status: typeof reports.$inferSelect.status;
-  count: number;
-};
-
-type DailyCountRecord = {
-  day: string;
-  count: number;
-};
-
-type FileStatusCountRecord = {
-  status: typeof files.$inferSelect.status;
-  count: number;
-  totalSizeBytes: number;
-};
-
-type DownloadCountRecord = {
-  totalDownloads: number;
-};
-
-type QueueJobSample = {
-  timestamp?: number;
-  delay?: number;
-};
-
-type QueueJobHistorySample = {
-  attemptsMade?: number;
-  processedOn?: number;
-  finishedOn?: number;
-};
-
-type QueueProcessingSummary = {
-  sampledJobs: number;
-  retriedJobs: number;
-  retryRate: number;
-  avgAttemptsMade: number;
-  avgDurationMs: number | null;
-  p95DurationMs: number | null;
-};
-
-type QueueHealthStatus = 'healthy' | 'degraded';
-
-type QueueStatsReader = {
-  name: string;
-  getJobCounts(): Promise<Record<string, number>>;
-  getWaiting(start: number, end: number): Promise<QueueJobSample[]>;
-  getDelayed(start: number, end: number): Promise<QueueJobSample[]>;
-  getJobs(
-    types: Array<'completed' | 'failed'>,
-    start: number,
-    end: number,
-    asc?: boolean
-  ): Promise<QueueJobHistorySample[]>;
-};
-
-const QUEUE_READ_TIMEOUT_MS = 3_000;
-const ABUSE_METRICS_WINDOW_DAYS = 14;
-
-class QueueReadTimeoutError extends Error {
-  constructor(queueName: string, operation: string, timeoutMs: number) {
-    super(`${queueName} ${operation} timed out after ${timeoutMs}ms`);
-    this.name = 'QueueReadTimeoutError';
-  }
-}
-
-export type AdminRouterDeps = {
-  findSessionById?: (sessionId: string) => Promise<SessionRecord | null>;
-  listAnomalies?: (limit: number) => Promise<AnomalyRecord[]>;
-  listOpenAnomalyCounts?: () => Promise<AnomalyCountRecord[]>;
-  listReportStatusCounts?: () => Promise<ReportStatusCountRecord[]>;
-  listReportCountsByDay?: (startInclusiveUtc: Date) => Promise<DailyCountRecord[]>;
-  listAutoHiddenCountsByDay?: (startInclusiveUtc: Date) => Promise<DailyCountRecord[]>;
-  listResolvedReportCountsByDay?: (startInclusiveUtc: Date) => Promise<DailyCountRecord[]>;
-  listDismissedReportCountsByDay?: (startInclusiveUtc: Date) => Promise<DailyCountRecord[]>;
-  listRateLimitBlockedCountsByDay?: (
-    startInclusiveUtc: Date,
-    windowDays: number
-  ) => Promise<DailyCountRecord[]>;
-  listFileStatusCounts?: () => Promise<FileStatusCountRecord[]>;
-  getDownloadCounts?: () => Promise<DownloadCountRecord>;
-  getAllowedGithubUserId?: () => string;
-  getQueues?: () => QueueStatsReader[];
-  headStorageObject?: (objectKey: string) => Promise<StorageHeadObject | null>;
-  now?: () => Date;
-  enqueueCleanupFile?: (fileId: string, objectKey: string, delayMs?: number) => Promise<void>;
-  getDb?: () => ReturnType<typeof createDb>;
-};
-
-let _db: ReturnType<typeof createDb> | null = null;
-
-function getDb() {
-  if (!_db) {
-    _db = createDb();
-  }
-
-  return _db;
-}
-
-function readCookieValue(cookieHeader: string | undefined, name: string): string | null {
-  if (!cookieHeader) {
-    return null;
-  }
-
-  for (const part of cookieHeader.split(';')) {
-    const [rawName, ...rest] = part.trim().split('=');
-    if (rawName !== name || rest.length === 0) {
-      continue;
-    }
-
-    const rawValue = rest.join('=');
-    if (!rawValue) {
-      return null;
-    }
-
-    try {
-      return decodeURIComponent(rawValue);
-    } catch {
-      return rawValue;
-    }
-  }
-
-  return null;
-}
-
-function getRequestId(c: Context): string {
-  return c.req.header('x-request-id') ?? crypto.randomUUID();
-}
-
-function setNoStoreHeaders(c: Context): void {
-  c.header('cache-control', 'no-store');
-}
-
-function withTimeout<T>(
-  operation: Promise<T>,
-  queueName: string,
-  operationName: string,
-  timeoutMs: number
-): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new QueueReadTimeoutError(queueName, operationName, timeoutMs));
-    }, timeoutMs);
-
-    operation.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      }
-    );
-  });
-}
-
-function getSessionId(c: Context): string | null {
-  return (
-    c.req.header('x-admin-session-id') ??
-    readCookieValue(c.req.header('cookie'), ADMIN_SESSION_COOKIE_NAME)
-  );
-}
-
-function getReportUrgency(reason: typeof reports.$inferSelect.reason): 'low' | 'medium' | 'high' {
-  switch (reason) {
-    case 'illegal_content':
-    case 'malware':
-      return 'high';
-    case 'copyright_violation':
-    case 'spam':
-      return 'medium';
-    case 'other':
-      return 'low';
-  }
-}
-
-function getReportUrgencyReasonFilter(urgency: 'low' | 'medium' | 'high') {
-  switch (urgency) {
-    case 'high':
-      return HIGH_URGENCY_REPORT_REASONS;
-    case 'medium':
-      return MEDIUM_URGENCY_REPORT_REASONS;
-    case 'low':
-      return LOW_URGENCY_REPORT_REASONS;
-  }
-}
-
-function getFallbackSeverity(type: AnomalyRecord['type']): OperationalAnomalySeverity {
-  switch (type) {
-    case 'missing_object':
-    case 'failed_cleanup':
-    case 'reconciliation_scan_incomplete':
-      return 'high';
-    case 'orphaned_object':
-    case 'stale_expiration':
-    case 'lifecycle_job_overdue':
-    case 'lifecycle_job_duplicate':
-      return 'medium';
-  }
-}
-
-function getAnomalySeverity(
-  type: AnomalyRecord['type'],
-  details: Record<string, unknown> | null
-): OperationalAnomalySeverity {
-  const severity = details?.severity;
-
-  if (severity === 'low' || severity === 'medium' || severity === 'high') {
-    return severity;
-  }
-
-  return getFallbackSeverity(type);
-}
-
-function normalizeAnomalyDetails(details: unknown): Record<string, unknown> | null {
-  if (details === null || details === undefined) {
-    return null;
-  }
-
-  if (typeof details === 'string') {
-    try {
-      return normalizeAnomalyDetails(JSON.parse(details));
-    } catch {
-      return { raw: details };
-    }
-  }
-
-  if (Array.isArray(details)) {
-    return { items: details };
-  }
-
-  if (typeof details === 'object') {
-    return details as Record<string, unknown>;
-  }
-
-  return { value: details };
-}
-
-function accessDeniedBody(reason: 'session_required' | 'session_expired' | 'not_allowlisted') {
-  switch (reason) {
-    case 'session_required':
-      return { reason, message: 'Admin session required.' };
-    case 'session_expired':
-      return { reason, message: 'Admin session expired.' };
-    case 'not_allowlisted':
-      return { reason, message: 'GitHub account is not allowlisted.' };
-  }
-}
-
-function clampAnomalyLimit(rawLimit: string | undefined): number {
-  const parsed = Number(rawLimit);
-
-  if (!Number.isInteger(parsed) || parsed < 1) {
-    return DEFAULT_ANOMALY_LIMIT;
-  }
-
-  return Math.min(parsed, MAX_ANOMALY_LIMIT);
-}
-
-function computeQueueLagMs(
-  waitingJobs: QueueJobSample[],
-  delayedJobs: QueueJobSample[],
-  nowMs: number
-): number {
-  const waiting = waitingJobs.at(0);
-  const delayed = delayedJobs.at(0);
-
-  const waitingLagMs =
-    typeof waiting?.timestamp === 'number' ? Math.max(0, nowMs - waiting.timestamp) : 0;
-  const delayedLagMs =
-    typeof delayed?.timestamp === 'number'
-      ? Math.max(0, nowMs - (delayed.timestamp + (delayed.delay ?? 0)))
-      : 0;
-
-  return Math.max(waitingLagMs, delayedLagMs);
-}
-
-function roundTo(value: number, decimals: number): number {
-  const factor = 10 ** decimals;
-  return Math.round(value * factor) / factor;
-}
-
-function computeQueueProcessingSummary(jobs: QueueJobHistorySample[]): QueueProcessingSummary {
-  if (jobs.length === 0) {
-    return {
-      sampledJobs: 0,
-      retriedJobs: 0,
-      retryRate: 0,
-      avgAttemptsMade: 0,
-      avgDurationMs: null,
-      p95DurationMs: null
-    };
-  }
-
-  let attemptsTotal = 0;
-  let retriedJobs = 0;
-  const durationsMs: number[] = [];
-
-  for (const job of jobs) {
-    const attemptsMade = Math.max(0, job.attemptsMade ?? 0);
-    attemptsTotal += attemptsMade;
-    if (attemptsMade > 0) {
-      retriedJobs += 1;
-    }
-
-    if (typeof job.processedOn === 'number' && typeof job.finishedOn === 'number') {
-      durationsMs.push(Math.max(0, job.finishedOn - job.processedOn));
-    }
-  }
-
-  durationsMs.sort((left, right) => left - right);
-
-  const avgDurationMs =
-    durationsMs.length > 0
-      ? Math.round(durationsMs.reduce((sum, duration) => sum + duration, 0) / durationsMs.length)
-      : null;
-
-  const p95DurationMs =
-    durationsMs.length > 0
-      ? (durationsMs[Math.max(0, Math.ceil(durationsMs.length * 0.95) - 1)] ?? null)
-      : null;
-
-  return {
-    sampledJobs: jobs.length,
-    retriedJobs,
-    retryRate: roundTo(retriedJobs / jobs.length, 4),
-    avgAttemptsMade: roundTo(attemptsTotal / jobs.length, 2),
-    avgDurationMs,
-    p95DurationMs
-  };
-}
-
-function normalizeQueueName(name: string): LifecycleQueueName {
-  switch (name) {
-    case 'expire-file':
-    case 'cleanup-file':
-    case 'reconcile':
-      return name;
-    default:
-      throw new Error(`Unsupported lifecycle queue: ${name}`);
-  }
-}
-
-function startOfUtcDay(value: Date): Date {
-  return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
-}
-
-function formatUtcDay(value: Date): string {
-  return value.toISOString().slice(0, 10);
-}
-
-function buildDailySeries(
-  rows: DailyCountRecord[],
-  startInclusiveUtc: Date,
-  windowDays: number
-): DailyCountRecord[] {
-  const byDay = new Map(rows.map((row) => [row.day, row.count]));
-  const series: DailyCountRecord[] = [];
-
-  for (let dayOffset = 0; dayOffset < windowDays; dayOffset += 1) {
-    const currentDay = new Date(startInclusiveUtc);
-    currentDay.setUTCDate(startInclusiveUtc.getUTCDate() + dayOffset);
-    const day = formatUtcDay(currentDay);
-
-    series.push({ day, count: byDay.get(day) ?? 0 });
-  }
-
-  return series;
-}
-
-function resolveRestoredFileStatus(params: {
-  file: typeof files.$inferSelect;
-  latestHiddenPreviousStatus: typeof files.$inferSelect.status | null;
-  now: Date;
-}): typeof files.$inferSelect.status {
-  const { file, latestHiddenPreviousStatus, now } = params;
-
-  if (file.expiresAt && file.expiresAt <= now) {
-    return 'expired';
-  }
-
-  if (
-    latestHiddenPreviousStatus === 'pending_upload' ||
-    latestHiddenPreviousStatus === 'active' ||
-    latestHiddenPreviousStatus === 'expiring' ||
-    latestHiddenPreviousStatus === 'expired' ||
-    latestHiddenPreviousStatus === 'consumed' ||
-    latestHiddenPreviousStatus === 'missing'
-  ) {
-    return latestHiddenPreviousStatus;
-  }
-
-  // Fall back to terminal or pre-activation states when legacy moderation
-  // rows are missing the prior status.
-  if (file.consumedAt !== null) {
-    return 'consumed';
-  }
-
-  if (file.activatedAt === null) {
-    return 'pending_upload';
-  }
-
-  return 'active';
-}
-
-async function defaultFindSessionById(sessionId: string): Promise<SessionRecord | null> {
-  const session = await getDb().query.adminSessions.findFirst({
-    where: eq(adminSessions.id, sessionId)
-  });
-
-  return session ?? null;
-}
-
-async function defaultListAnomalies(limit: number): Promise<AnomalyRecord[]> {
-  return getDb()
-    .select({
-      id: operationalAnomalies.id,
-      type: operationalAnomalies.type,
-      fileId: operationalAnomalies.fileId,
-      details: operationalAnomalies.details,
-      detectedAt: operationalAnomalies.detectedAt,
-      resolvedAt: operationalAnomalies.resolvedAt,
-      resolution: operationalAnomalies.resolution
-    })
-    .from(operationalAnomalies)
-    .where(isNull(operationalAnomalies.resolvedAt))
-    .orderBy(desc(operationalAnomalies.detectedAt))
-    .limit(limit);
-}
-
-async function defaultListOpenAnomalyCounts(): Promise<AnomalyCountRecord[]> {
-  return getDb()
-    .select({
-      type: operationalAnomalies.type,
-      count: sql<number>`count(*)::int`
-    })
-    .from(operationalAnomalies)
-    .where(isNull(operationalAnomalies.resolvedAt))
-    .groupBy(operationalAnomalies.type);
-}
-
-async function defaultListReportStatusCounts(): Promise<ReportStatusCountRecord[]> {
-  return getDb()
-    .select({
-      status: reports.status,
-      count: sql<number>`count(*)::int`
-    })
-    .from(reports)
-    .groupBy(reports.status);
-}
-
-async function defaultListReportCountsByDay(startInclusiveUtc: Date): Promise<DailyCountRecord[]> {
-  const dayBucket = sql<string>`to_char(date_trunc('day', timezone('UTC', ${reports.createdAt})), 'YYYY-MM-DD')`;
-
-  return getDb()
-    .select({
-      day: dayBucket,
-      count: sql<number>`count(*)::int`
-    })
-    .from(reports)
-    .where(gte(reports.createdAt, startInclusiveUtc))
-    .groupBy(dayBucket)
-    .orderBy(asc(dayBucket));
-}
-
-async function defaultListAutoHiddenCountsByDay(
-  startInclusiveUtc: Date
-): Promise<DailyCountRecord[]> {
-  const dayBucket = sql<string>`to_char(date_trunc('day', timezone('UTC', ${fileModerationActions.createdAt})), 'YYYY-MM-DD')`;
-
-  return getDb()
-    .select({
-      day: dayBucket,
-      count: sql<number>`count(*)::int`
-    })
-    .from(fileModerationActions)
-    .where(
-      and(
-        eq(fileModerationActions.action, 'hide'),
-        eq(fileModerationActions.actorGithubLogin, 'system:auto_hide'),
-        gte(fileModerationActions.createdAt, startInclusiveUtc)
-      )
-    )
-    .groupBy(dayBucket)
-    .orderBy(asc(dayBucket));
-}
-
-async function defaultListResolvedReportCountsByDay(
-  startInclusiveUtc: Date
-): Promise<DailyCountRecord[]> {
-  const dayBucket = sql<string>`to_char(date_trunc('day', timezone('UTC', ${reports.resolvedAt})), 'YYYY-MM-DD')`;
-
-  return getDb()
-    .select({
-      day: dayBucket,
-      count: sql<number>`count(*)::int`
-    })
-    .from(reports)
-    .where(
-      and(
-        eq(reports.status, 'resolved'),
-        isNotNull(reports.resolvedAt),
-        gte(reports.resolvedAt, startInclusiveUtc)
-      )
-    )
-    .groupBy(dayBucket)
-    .orderBy(asc(dayBucket));
-}
-
-async function defaultListDismissedReportCountsByDay(
-  startInclusiveUtc: Date
-): Promise<DailyCountRecord[]> {
-  const dayBucket = sql<string>`to_char(date_trunc('day', timezone('UTC', ${reports.resolvedAt})), 'YYYY-MM-DD')`;
-
-  return getDb()
-    .select({
-      day: dayBucket,
-      count: sql<number>`count(*)::int`
-    })
-    .from(reports)
-    .where(
-      and(
-        eq(reports.status, 'dismissed'),
-        isNotNull(reports.resolvedAt),
-        gte(reports.resolvedAt, startInclusiveUtc)
-      )
-    )
-    .groupBy(dayBucket)
-    .orderBy(asc(dayBucket));
-}
-
-async function defaultListRateLimitBlockedCountsByDay(
-  startInclusiveUtc: Date,
-  windowDays: number
-): Promise<DailyCountRecord[]> {
-  return listRateLimitBlockedCountsByDay(
-    getRedisClient(),
-    RATE_LIMIT_BLOCKED_METRIC_SURFACES,
-    startInclusiveUtc,
-    windowDays
-  );
-}
-
-async function defaultListFileStatusCounts(): Promise<FileStatusCountRecord[]> {
-  return getDb()
-    .select({
-      status: files.status,
-      count: sql<number>`count(*)::int`,
-      totalSizeBytes: sql<number>`coalesce(sum(${files.sizeBytes}), 0)::bigint::int8`
-    })
-    .from(files)
-    .groupBy(files.status);
-}
-
-async function defaultGetDownloadCounts(): Promise<DownloadCountRecord> {
-  const [row] = await getDb()
-    .select({
-      totalDownloads: sql<number>`count(*)::int`
-    })
-    .from(downloadEvents)
-    .where(eq(downloadEvents.eventType, 'completed'));
-
-  return { totalDownloads: row?.totalDownloads ?? 0 };
-}
-
-function defaultGetQueues(): QueueStatsReader[] {
-  return [getExpireQueue(), getCleanupQueue(), getReconcileQueue()];
-}
-
-async function readQueueMetric<T>(params: {
-  queue: QueueStatsReader;
-  requestId: string;
-  operation: 'getJobCounts' | 'getWaiting' | 'getDelayed' | 'getJobs';
-  read: () => Promise<T>;
-  fallback: T;
-}): Promise<{ value: T; degraded: boolean; error: string | null }> {
-  try {
-    const value = await withTimeout(
-      params.read(),
-      params.queue.name,
-      params.operation,
-      QUEUE_READ_TIMEOUT_MS
-    );
-
-    return { value, degraded: false, error: null };
-  } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
-
-    logger.warn('Admin queue health read degraded', {
-      event: 'admin_queue_health_degraded',
-      requestId: params.requestId,
-      actor: 'admin',
-      entity: { type: 'queue', id: params.queue.name },
-      outcome: 'failure',
-      operation: params.operation,
-      reason: err instanceof QueueReadTimeoutError ? 'timeout' : 'queue_read_failed',
-      error
-    });
-
-    return {
-      value: params.fallback,
-      degraded: true,
-      error
-    };
-  }
-}
-
-async function requireAdminSession(
-  c: Context,
-  deps: Required<AdminRouterDeps>
-): Promise<{ ok: true; session: SessionRecord } | { ok: false; response: Response }> {
-  const requestId = getRequestId(c);
-  const sessionId = getSessionId(c);
-
-  if (!sessionId) {
-    logger.warn('Admin access denied: missing session', {
-      event: 'admin_access_denied',
-      requestId,
-      actor: 'admin',
-      entity: { type: 'http_request', id: c.req.path },
-      outcome: 'failure',
-      reason: 'session_required'
-    });
-    return { ok: false, response: c.json(accessDeniedBody('session_required'), 401) };
-  }
-
-  let session: SessionRecord | null;
-  try {
-    session = await deps.findSessionById(sessionId);
-  } catch (err) {
-    logger.error('Admin session lookup failed', {
-      event: 'admin_session_lookup_failed',
-      requestId,
-      actor: 'admin',
-      entity: { type: 'admin_session', id: sessionId },
-      outcome: 'failure',
-      error: err instanceof Error ? err.message : String(err)
-    });
-    return { ok: false, response: c.json({ error: 'internal_error' }, 500) };
-  }
-
-  if (!session || session.revokedAt) {
-    logger.warn('Admin access denied: session missing or revoked', {
-      event: 'admin_access_denied',
-      requestId,
-      actor: 'admin',
-      entity: { type: 'admin_session', id: sessionId },
-      outcome: 'failure',
-      reason: 'session_required'
-    });
-    return { ok: false, response: c.json(accessDeniedBody('session_required'), 401) };
-  }
-
-  if (session.expiresAt <= deps.now()) {
-    logger.warn('Admin access denied: session expired', {
-      event: 'admin_access_denied',
-      requestId,
-      actor: 'admin',
-      entity: { type: 'admin_session', id: session.id },
-      outcome: 'failure',
-      reason: 'session_expired'
-    });
-    return { ok: false, response: c.json(accessDeniedBody('session_expired'), 401) };
-  }
-
-  if (session.githubId !== deps.getAllowedGithubUserId()) {
-    logger.warn('Admin access denied: github user not allowlisted', {
-      event: 'admin_access_denied',
-      requestId,
-      actor: 'admin',
-      entity: { type: 'admin_session', id: session.id },
-      outcome: 'failure',
-      reason: 'not_allowlisted'
-    });
-    return { ok: false, response: c.json(accessDeniedBody('not_allowlisted'), 403) };
-  }
-
-  return { ok: true, session };
-}
-
-async function buildQueueHealthSnapshot(queue: QueueStatsReader, nowMs: number, requestId: string) {
-  const [countsResult, waitingResult, delayedResult, jobsResult] = await Promise.all([
-    readQueueMetric({
-      queue,
-      requestId,
-      operation: 'getJobCounts',
-      read: () => queue.getJobCounts(),
-      fallback: {}
-    }),
-    readQueueMetric({
-      queue,
-      requestId,
-      operation: 'getWaiting',
-      read: () => queue.getWaiting(0, 0),
-      fallback: []
-    }),
-    readQueueMetric({
-      queue,
-      requestId,
-      operation: 'getDelayed',
-      read: () => queue.getDelayed(0, 0),
-      fallback: []
-    }),
-    readQueueMetric({
-      queue,
-      requestId,
-      operation: 'getJobs',
-      read: () => queue.getJobs(['completed', 'failed'], 0, 49),
-      fallback: []
-    })
-  ]);
-
-  const counts = countsResult.value;
-  const waitingJobs = waitingResult.value;
-  const delayedJobs = delayedResult.value;
-  const recentJobs = jobsResult.value;
-  const degraded =
-    countsResult.degraded ||
-    waitingResult.degraded ||
-    delayedResult.degraded ||
-    jobsResult.degraded;
-  const lastError =
-    countsResult.error ?? waitingResult.error ?? delayedResult.error ?? jobsResult.error ?? null;
-
-  return {
-    queue: normalizeQueueName(queue.name),
-    status: degraded
-      ? ('degraded' satisfies QueueHealthStatus)
-      : ('healthy' satisfies QueueHealthStatus),
-    lastError,
-    waiting: counts.waiting ?? 0,
-    active: counts.active ?? 0,
-    delayed: counts.delayed ?? 0,
-    failed: counts.failed ?? 0,
-    completed: counts.completed ?? 0,
-    lagMs: computeQueueLagMs(waitingJobs, delayedJobs, nowMs),
-    processing: computeQueueProcessingSummary(recentJobs)
-  };
-}
+  defaultFindSessionById,
+  defaultGetDownloadCounts,
+  defaultGetQueues,
+  defaultListAnomalies,
+  defaultListAutoHiddenCountsByDay,
+  defaultListDismissedReportCountsByDay,
+  defaultListFileStatusCounts,
+  defaultListOpenAnomalyCounts,
+  defaultListRateLimitBlockedCountsByDay,
+  defaultListReportCountsByDay,
+  defaultListReportStatusCounts,
+  defaultListResolvedReportCountsByDay,
+  enqueueCleanupFileJob
+} from './queries';
+import { buildQueueHealthSnapshot } from './queue-health';
+import { getSessionId, requireAdminSession } from './session';
+import type { AdminRouterDeps } from './types';
+import {
+  ABUSE_METRICS_WINDOW_DAYS,
+  DAY_IN_MS,
+  FILE_DETAIL_MODERATION_HISTORY_LIMIT,
+  FILE_DETAIL_REPORT_LIMIT
+} from './types';
 
 export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
   const resolvedDeps: Required<AdminRouterDeps> = {
@@ -828,7 +73,7 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
     headStorageObject: deps.headStorageObject ?? storageAdapter.head,
     now: deps.now ?? (() => new Date()),
     enqueueCleanupFile: deps.enqueueCleanupFile ?? enqueueCleanupFileJob,
-    getDb: deps.getDb ?? getDb
+    getDb: deps.getDb ?? getDbShared
   };
 
   const router = new Hono();
@@ -883,7 +128,6 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
   });
 
   // ─── GET /overview ───────────────────────────────────────────────────────
-  // Returns file counts by status, total storage, and download volume.
   router.get('/overview', async (c) => {
     const auth = await requireAdminSession(c, resolvedDeps);
     if (!auth.ok) return auth.response;
@@ -1392,7 +636,6 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
         return c.json({ ok: false, error: { code: 'not_found', message: 'File not found.' } }, 404);
       }
 
-      // Determine the valid target status for each action.
       let nextStatus: typeof file.status;
       let latestHiddenPreviousStatus: typeof file.status | null = null;
 
@@ -1502,8 +745,6 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
         restoredFrom: latestHiddenPreviousStatus
       });
 
-      // If deleting or restoring into an already-expired lifecycle state,
-      // ensure the storage cleanup path is active.
       if (nextStatus === 'deleted' || nextStatus === 'expired') {
         resolvedDeps.enqueueCleanupFile(fileId, file.objectKey).catch((err) => {
           logger.warn('Admin moderation: cleanup enqueue failed (reconciler will repair)', {
@@ -1713,7 +954,6 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
   });
 
   // ─── GET /downloads ──────────────────────────────────────────────────────
-  // Returns recent download events with optional file filter.
   router.get('/downloads', async (c) => {
     const auth = await requireAdminSession(c, resolvedDeps);
     if (!auth.ok) return auth.response;
@@ -1779,4 +1019,5 @@ export function createAdminRouter(deps: AdminRouterDeps = {}): Hono {
   return router;
 }
 
+export type { AdminRouterDeps } from './types';
 export const adminRouter = createAdminRouter();

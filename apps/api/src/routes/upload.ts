@@ -1,7 +1,7 @@
 import { API_ERROR_CODES, uploadRequestSchema } from '@anonshare/contracts';
 import { MAX_FILE_SIZE_BYTES } from '@anonshare/domain';
 import { app as appConfig, loadSystemSettingOrDefault } from '@anonshare/infrastructure/config';
-import { createDb } from '@anonshare/infrastructure/db';
+import type { createDb } from '@anonshare/infrastructure/db';
 import { files } from '@anonshare/infrastructure/db/schema';
 import { checkRateLimit, recordRateLimitBlocked } from '@anonshare/infrastructure/rate-limit';
 import type { Redis } from '@anonshare/infrastructure/redis';
@@ -11,36 +11,13 @@ import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { logger } from '../logger';
 import { enqueueCleanupFileJob, enqueueExpireFileJob } from '../queues';
+import { errorBody, hashIp, recordBlockedMetricBestEffort, getDb as sharedGetDb } from './support';
 
-// ─── Rate limiting ────────────────────────────────────────────────────────────
-/**
- * Hash a raw IP to a short hex string for rate-limit key construction.
- * Avoids persisting raw IPs in Redis keys.
- */
-async function hashIpForRateLimit(raw?: string): Promise<string | null> {
-  if (!raw) return null;
-  const firstIp = raw.split(',')[0];
-  if (!firstIp) return null;
-  const data = new TextEncoder().encode(firstIp.trim());
-  const digest = await crypto.subtle.digest('SHA-256', data);
-  return Buffer.from(digest).toString('hex').slice(0, 32);
-}
-
+// ─── Constants ────────────────────────────────────────────────────────────────
 const UPLOAD_RATE_WINDOW_SECONDS = 3600;
 
-// ─── Lazy DB singleton ────────────────────────────────────────────────────────
-// Defer initialisation to first use so that importing this module in tests
-// (where DATABASE_URL is not set) does not fail at module load time.
-// In production, validateApiEnv() has already been called before any request
-// reaches this handler, so the env is guaranteed to be present.
-let _db: ReturnType<typeof createDb> | null = null;
-
-function getDb() {
-  if (!_db) {
-    _db = createDb();
-  }
-  return _db;
-}
+const getDb = sharedGetDb;
+const hashIpForRateLimit = hashIp;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -78,10 +55,6 @@ function sanitizeFilename(raw: string): string {
     .trim()
     .slice(0, 255);
   return sanitized || 'file';
-}
-
-function errorBody(code: string, message: string, details?: Record<string, string>) {
-  return { ok: false as const, error: { code, message, ...(details ? { details } : {}) } };
 }
 
 type UploadStorage = Pick<typeof storageAdapter, 'put' | 'head' | 'delete'>;
@@ -235,7 +208,11 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
           count: limit.count,
           resetInSeconds: limit.resetInSeconds
         });
-        recordRateLimitBlocked(resolveGetRedis(), 'upload').catch(() => {});
+        recordBlockedMetricBestEffort(
+          recordRateLimitBlocked(resolveGetRedis(), 'upload'),
+          'upload',
+          logger
+        );
         return c.json(
           errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many uploads. Please try again later.'),
           429

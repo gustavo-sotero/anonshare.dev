@@ -12,7 +12,7 @@ Three processes must be running in production:
 | `apps/api` | `bun run start` | 3001 | Hono REST API |
 | `apps/worker` | `bun run start` | 3002 | BullMQ background jobs plus readiness endpoint |
 
-Each process reads its own `.env` file. The processes are deliberately independent and can be scaled or restarted individually.
+The processes are deliberately independent and can be scaled or restarted individually. The environment-variable contract is shared across local development, CI, and deployment: local development reads it from the root `.env`, while CI and production inject the same variable names through the host platform or secret manager.
 
 ## Infrastructure Dependencies
 
@@ -21,49 +21,62 @@ All three processes depend on:
 | Dependency | Purpose | Minimum version |
 |---|---|---|
 | PostgreSQL | Metadata, reports, sessions, anomalies | 16 |
-| Redis | BullMQ queue state, rate limiting, metrics | 7 |
+| Redis | BullMQ queue state, rate limiting, rate-limit blocked metrics, OAuth pending state | 7 |
 | S3-compatible object storage | File objects | Any S3-API compatible provider |
 
 Supported S3-compatible providers: AWS S3, Cloudflare R2, MinIO (self-hosted). The storage adapter uses Bun's native S3 API and does not require the AWS SDK.
 
+### Trusted Reverse Proxy
+
+The API reads `X-Forwarded-For` for IP-based rate limiting and download event logging. In production, place all processes behind a reverse proxy (e.g. nginx, Caddy, Cloudflare) that sets this header reliably. The API hashes the first IP from the header — it never stores raw addresses.
+
+### HTTPS
+
+All `APP_BASE_URL` and `APP_API_URL` values must use `https://` in any environment beyond local development. GitHub OAuth callbacks, admin session cookies, and presigned storage URLs depend on HTTPS for transport security.
+
+### Queue Version Alignment
+
+Both `apps/api` (job producer) and `apps/worker` (job consumer) depend on BullMQ. They must run the same major version to avoid serialisation or protocol mismatches. The workspace currently pins `^5.71.0` in both packages.
+
+### Redis Ownership and Queue Connections
+
+- Redis itself is a shared infrastructure dependency for BullMQ queue state, rate limiting, rate-limit blocked metrics, and OAuth pending state.
+- BullMQ does not reuse the shared application Redis client. Producers and workers create their own queue connections through `@anonshare/infrastructure/queue` so connection policy stays explicit per role.
+- The shared Redis client in `@anonshare/infrastructure/redis` is reserved for non-BullMQ concerns such as rate limiting, admin metrics, and OAuth state storage.
+
 ## Environment Variables
 
-Each process requires a `.env` file at its working directory. For reference:
+A single root `.env` file at the workspace root is the source of truth for local development and Docker Compose defaults. CI and production must inject the same variable names even when each process receives its own environment independently.
+
+Canonical variable contract by process:
 
 ```
-# apps/api/.env
+# Shared across web/api/worker
 NODE_ENV=production
 APP_BASE_URL=https://anonshare.dev
-DATABASE_URL=postgres://user:pass@host:5432/anonsharedb
+APP_API_URL=https://api.anonshare.dev
 REDIS_URL=redis://host:6379
+
+# API + worker
+DATABASE_URL=postgres://user:pass@host:5432/anonsharedb
 STORAGE_ENDPOINT=https://s3.amazonaws.com
 STORAGE_ACCESS_KEY_ID=...
 STORAGE_SECRET_ACCESS_KEY=...
 STORAGE_BUCKET=anonshare-prod
 STORAGE_REGION=us-east-1
+
+# API only
 GITHUB_CLIENT_ID=...
 GITHUB_CLIENT_SECRET=...
 GITHUB_ALLOWED_USER_ID=<your_numeric_github_id>
 SESSION_SECRET=<random 64+ character string>
 PORT=3001
 
-# apps/web/.env
-NODE_ENV=production
-APP_BASE_URL=https://anonshare.dev
-APP_API_URL=https://api.anonshare.dev
-
-# apps/worker/.env
-NODE_ENV=production
-APP_BASE_URL=https://anonshare.dev
-DATABASE_URL=postgres://user:pass@host:5432/anonsharedb
-REDIS_URL=redis://host:6379
-STORAGE_ENDPOINT=https://s3.amazonaws.com
-STORAGE_ACCESS_KEY_ID=...
-STORAGE_SECRET_ACCESS_KEY=...
-STORAGE_BUCKET=anonshare-prod
-STORAGE_REGION=us-east-1
+# Worker only
 WORKER_HEALTH_PORT=3002
 ```
+
+Do not maintain a separate, divergent env model for each process. The variable names above are the supported contract that must remain consistent with the runtime validators, CI, and operator documentation.
 
 ### Critical Security Values
 
@@ -78,7 +91,7 @@ WORKER_HEALTH_PORT=3002
 - [ ] PostgreSQL running and accessible with the configured `DATABASE_URL`
 - [ ] Redis running and accessible with the configured `REDIS_URL`
 - [ ] S3-compatible bucket created and accessible with the configured storage credentials
-- [ ] All `.env` files populated with production values
+- [ ] The platform injects the canonical environment variables listed above into each process
 - [ ] `GITHUB_ALLOWED_USER_ID` verified against `https://api.github.com/users/<yourlogin>`
 
 ### Database
@@ -124,6 +137,10 @@ bun run infra:check
 
 The API and worker `/health` endpoints return 200 when all dependencies are reachable and the process is ready, 503 when degraded. The web `/health` endpoint confirms the SSR process is serving requests.
 
+- API `/health`: dependency-aware and should fail closed when PostgreSQL, Redis, or storage are degraded.
+- Worker `/health`: dependency-aware and should fail closed until queues are ready and dependencies are reachable.
+- Web `/health`: intentionally process-only; it verifies the SSR process is responding and does not probe PostgreSQL, Redis, or storage.
+
 ## Startup Order
 
 1. Start PostgreSQL and Redis (external managed services or containers).
@@ -131,6 +148,8 @@ The API and worker `/health` endpoints return 200 when all dependencies are reac
 3. Start `apps/api` — validates env on boot, fails fast if any required var is missing.
 4. Start `apps/worker` — validates env on boot, opens `WORKER_HEALTH_PORT`, connects to queues, and registers the hourly reconcile scheduler.
 5. Start `apps/web` — validates env on boot.
+
+For local and CI verification, run `bun run verify` from the workspace root. It includes dependency readiness, BullMQ version parity, typecheck, lint, tests, build, and migration validation.
 
 ## Timeouts and Retry Configuration
 
@@ -167,7 +186,7 @@ Object storage is backed by the provider's own durability guarantees. For R2 or 
 
 ### Redis
 
-Redis contains only ephemeral state: queue jobs, rate-limit counters, and rate-limit metrics. Persistence is desirable for queue durability (BullMQ) but not strictly required. Losing Redis on restart means in-flight jobs may need to be re-enqueued by the reconciler.
+Redis contains ephemeral but operationally important state: BullMQ job queues, rate-limit counters, rate-limit blocked metrics, and OAuth pending state tokens (TTL-scoped, single-use). Persistence is desirable for queue durability but not strictly required. Losing Redis on restart means in-flight jobs may need to be re-enqueued by the reconciler, and any in-progress OAuth login flows will need to be restarted by the user.
 
 Configure AOF persistence in Redis for best queue durability:
 ```

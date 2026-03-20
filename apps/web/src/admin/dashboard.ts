@@ -32,3 +32,16 @@ export function buildStorageHighlights(overview: AdminOverviewResponse, files: A
     largestFile: files[0] ?? null
   };
 }
+
+/**
+ * Prompt the user for confirmation before a moderation action.
+ * Returns true when the action should proceed (no message required or user confirmed).
+ */
+export function confirmModerationAction(
+  action: AdminModerationAction,
+  targetLabel: string
+): boolean {
+  const message = getModerationConfirmationMessage(action, targetLabel);
+  if (!message) return true;
+  return window.confirm(message);
+}

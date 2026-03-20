@@ -9,7 +9,7 @@ import {
   QUEUE_EXPIRE_FILE,
   QUEUE_RECONCILE
 } from '@anonshare/contracts';
-import { redis as redisConfig } from '@anonshare/infrastructure/config';
+import { getProducerConnectionConfig } from '@anonshare/infrastructure/queue';
 import { Queue } from 'bullmq';
 
 let _expireQueue: Queue<ExpireFileJobPayload> | null = null;
@@ -19,7 +19,7 @@ let _reconcileQueue: Queue<ReconcileJobPayload> | null = null;
 export function getExpireQueue(): Queue<ExpireFileJobPayload> {
   if (!_expireQueue) {
     _expireQueue = new Queue<ExpireFileJobPayload>(QUEUE_EXPIRE_FILE, {
-      connection: { url: redisConfig.url() }
+      connection: getProducerConnectionConfig()
     });
   }
   return _expireQueue;
@@ -28,7 +28,7 @@ export function getExpireQueue(): Queue<ExpireFileJobPayload> {
 export function getCleanupQueue(): Queue<CleanupFileJobPayload> {
   if (!_cleanupQueue) {
     _cleanupQueue = new Queue<CleanupFileJobPayload>(QUEUE_CLEANUP_FILE, {
-      connection: { url: redisConfig.url() }
+      connection: getProducerConnectionConfig()
     });
   }
   return _cleanupQueue;
@@ -37,7 +37,7 @@ export function getCleanupQueue(): Queue<CleanupFileJobPayload> {
 export function getReconcileQueue(): Queue<ReconcileJobPayload> {
   if (!_reconcileQueue) {
     _reconcileQueue = new Queue<ReconcileJobPayload>(QUEUE_RECONCILE, {
-      connection: { url: redisConfig.url() }
+      connection: getProducerConnectionConfig()
     });
   }
   return _reconcileQueue;

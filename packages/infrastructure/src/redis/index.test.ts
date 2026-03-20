@@ -35,14 +35,14 @@ describe('pingRedisUrl', () => {
     let disconnectCalls = 0;
 
     await expect(
-      pingRedisUrl('redis://default:secret@example.com:6379', () => ({
+      pingRedisUrl('redis://default:secret@example.com:6379', (() => ({
         disconnect: () => {
           disconnectCalls += 1;
         },
         ping: async () => {
           throw new Error('NOAUTH Authentication required.');
         }
-      }))
+      })) as never)
     ).rejects.toThrow('NOAUTH Authentication required.');
 
     expect(disconnectCalls).toBe(1);
@@ -50,10 +50,10 @@ describe('pingRedisUrl', () => {
 
   test('rejects unexpected ping responses', async () => {
     await expect(
-      pingRedisUrl('redis://default:secret@example.com:6379', () => ({
+      pingRedisUrl('redis://default:secret@example.com:6379', (() => ({
         disconnect: () => {},
         ping: async () => 'OK'
-      }))
+      })) as never)
     ).rejects.toThrow('Unexpected Redis health check response: OK');
   });
 });
