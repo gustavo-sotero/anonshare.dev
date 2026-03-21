@@ -4,6 +4,11 @@ type PackageManifest = {
   dependencies?: Record<string, string>;
 };
 
+type BullmqConsumer = {
+  name: string;
+  path: string;
+};
+
 function readBullmqVersion(path: string): string {
   const manifest = JSON.parse(readFileSync(path, 'utf8')) as PackageManifest;
   const version = manifest.dependencies?.bullmq;
@@ -15,11 +20,30 @@ function readBullmqVersion(path: string): string {
   return version;
 }
 
-const apiVersion = readBullmqVersion('apps/api/package.json');
-const workerVersion = readBullmqVersion('apps/worker/package.json');
+const consumers: BullmqConsumer[] = [
+  { name: 'api', path: 'apps/api/package.json' },
+  { name: 'worker', path: 'apps/worker/package.json' },
+  { name: 'infrastructure', path: 'packages/infrastructure/package.json' }
+];
 
-if (apiVersion !== workerVersion) {
-  throw new Error(`BullMQ version mismatch: api=${apiVersion} worker=${workerVersion}`);
+const versions = consumers.map((consumer) => ({
+  name: consumer.name,
+  version: readBullmqVersion(consumer.path)
+}));
+
+const expectedVersion = versions[0]?.version;
+
+if (!expectedVersion) {
+  throw new Error('No BullMQ consumers configured for parity validation');
 }
 
-console.log(`BullMQ versions aligned: ${apiVersion}`);
+const mismatches = versions.filter((entry) => entry.version !== expectedVersion);
+
+if (mismatches.length > 0) {
+  const details = versions.map((entry) => `${entry.name}=${entry.version}`).join(' ');
+  throw new Error(`BullMQ version mismatch: ${details}`);
+}
+
+console.log(
+  `BullMQ versions aligned: ${versions.map((entry) => `${entry.name}=${entry.version}`).join(' ')}`
+);

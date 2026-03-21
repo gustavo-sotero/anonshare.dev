@@ -433,6 +433,33 @@ describe('POST /admin/auth/logout', () => {
 // ─── Restart-safe OAuth state ─────────────────────────────────────────────────
 
 describe('OAuth state durability across router instances', () => {
+  test('expired oauth state is rejected before callback consumption', async () => {
+    const originalNow = Date.now;
+    const sharedRepo = createInMemoryOAuthStateRepo();
+
+    try {
+      Date.now = () => 1_000;
+
+      const app1 = new Hono();
+      app1.route('/admin/auth', createAuthRouter(buildDeps({ oauthStateRepo: sharedRepo })));
+      const login = await initiateLogin(app1);
+
+      Date.now = () => 1_000 + 10 * 60 * 1000 + 1;
+
+      const app2 = new Hono();
+      app2.route('/admin/auth', createAuthRouter(buildDeps({ oauthStateRepo: sharedRepo })));
+
+      const response = await app2.request(
+        `http://localhost/admin/auth/callback?code=github_code_123&state=${encodeURIComponent(login.state)}`
+      );
+
+      expect(response.status).toBe(302);
+      expect(response.headers.get('location')).toContain('error=state_expired');
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
   test('state created by one router instance can be consumed by a second instance (restart-safe)', async () => {
     const sharedRepo = createInMemoryOAuthStateRepo();
 

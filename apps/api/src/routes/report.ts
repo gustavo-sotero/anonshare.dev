@@ -10,6 +10,7 @@ import { Hono } from 'hono';
 import { logger } from '../logger';
 import {
   errorBody,
+  getRequestId,
   hashIp,
   parseShareToken,
   recordBlockedMetricBestEffort,
@@ -56,7 +57,7 @@ export function createReportRouter(deps: ReportRouterDeps = {}): Hono {
 
   router.post('/:token', async (c) => {
     c.header('cache-control', 'no-store');
-    const requestId = c.req.header('x-request-id') ?? crypto.randomUUID();
+    const requestId = getRequestId(c);
 
     const token = parseShareToken(c.req.param('token'));
     if (!token) {

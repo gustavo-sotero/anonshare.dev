@@ -11,7 +11,13 @@ import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { logger } from '../logger';
 import { enqueueCleanupFileJob, enqueueExpireFileJob } from '../queues';
-import { errorBody, hashIp, recordBlockedMetricBestEffort, getDb as sharedGetDb } from './support';
+import {
+  errorBody,
+  getRequestId,
+  hashIp,
+  recordBlockedMetricBestEffort,
+  getDb as sharedGetDb
+} from './support';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const UPLOAD_RATE_WINDOW_SECONDS = 3600;
@@ -168,7 +174,7 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
    *   the reconciler will promote it when it detects the live storage object.
    */
   router.post('/', async (c) => {
-    const requestId = c.req.header('x-request-id') ?? crypto.randomUUID();
+    const requestId = getRequestId(c);
 
     // ── Rate limiting ─────────────────────────────────────────────────────────
     const rawIp = c.req.header('x-forwarded-for') ?? c.req.header('x-real-ip');

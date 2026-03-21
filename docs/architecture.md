@@ -78,7 +78,7 @@ Admin web routes should prefer TanStack Router `validateSearch` and route loader
 - `bun run lint`: Biome linting plus import-boundary enforcement.
 - `bun run test`: foundational tests.
 - `bun run build`: bundles the web, API, and worker entrypoints.
-- `bun run verify:bullmq`: enforces the shared BullMQ dependency line between API producers and worker consumers.
+- `bun run verify:bullmq`: enforces the shared BullMQ dependency line across every workspace package that imports BullMQ.
 - `bun run db:generate` / `bun run db:migrate`: root Drizzle tooling for schema evolution; see `docs/conventions.md` for the full migration workflow.
 - `bun run verify`: aggregate quality gate used before commits, covering dependency readiness, typecheck, lint, tests, build, and migration validation.
 

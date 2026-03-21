@@ -40,7 +40,7 @@ This document consolidates the working conventions established in Module 1 so la
 
 - `bun run infra:up` starts PostgreSQL, Redis, and MinIO.
 - `bun run infra:check` validates application-facing connectivity, not just container health.
-- `bun run verify:bullmq` enforces API/worker BullMQ version parity from the workspace root.
+- `bun run verify:bullmq` enforces BullMQ version parity across every workspace package that depends on it.
 - `bun run verify` is the root quality gate before merging or handing off work.
 - `bun run db:generate` and `bun run db:migrate` are the only supported entrypoints for Drizzle tooling.
 

@@ -155,7 +155,7 @@ bun run --cwd apps/web dev
 | `bun run infra:down` | Stop Docker services (keep volumes) |
 | `bun run infra:check` | Verify local PostgreSQL, Redis, and MinIO connectivity |
 | `bun run infra:reset` | Stop + destroy volumes + restart (full local reset) |
-| `bun run verify:bullmq` | Ensure the API and worker resolve the same BullMQ version |
+| `bun run verify:bullmq` | Ensure every BullMQ-consuming workspace package stays on the same version line |
 
 ---
 

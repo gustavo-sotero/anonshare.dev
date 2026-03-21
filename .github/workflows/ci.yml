@@ -101,25 +101,8 @@ jobs:
           mc alias set local http://localhost:9000 minioadmin minioadmin
           mc mb local/anonshare-dev --ignore-existing
 
-      - name: Validate infrastructure dependencies
-        run: bun packages/infrastructure/src/scripts/check-local-platform.ts
-
-      - name: Check BullMQ version consistency
-        run: bun run verify:bullmq
-
-      - name: Typecheck
-        run: bun run typecheck
-
-      - name: Lint
-        run: bun run lint
-
-      - name: Test
-        run: bun run test
-
-      - name: Build
-        run: bun run build
-        env:
-          NODE_ENV: production
+      - name: Run workspace verify gate
+        run: bun run verify
 
       - name: Smoke test built health endpoints
         shell: bash
@@ -200,10 +183,3 @@ jobs:
           assert_header http://localhost:3002/health cache-control no-store
           assert_header http://localhost:3002/health x-content-type-options nosniff
 
-      - name: Validate migration drift
-        run: |
-          bun packages/infrastructure/src/scripts/run-drizzle.ts generate
-          git diff --exit-code -- packages/infrastructure/src/db/migrations
-
-      - name: Validate migrations
-        run: bun packages/infrastructure/src/scripts/run-drizzle.ts migrate

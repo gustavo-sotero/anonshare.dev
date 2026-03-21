@@ -21,6 +21,7 @@ import { Hono } from 'hono';
 import { logger } from '../logger';
 import { enqueueCleanupFileJob } from '../queues';
 import {
+  getRequestId,
   persistEventBestEffort,
   recordBlockedMetricBestEffort,
   errorBody as sharedErrorBody,
@@ -118,7 +119,7 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
   // Unavailable files return 410 with a specific error code so the UI can
   // render a precise state message rather than a generic error.
   router.get('/:token', async (c) => {
-    const requestId = c.req.header('x-request-id') ?? crypto.randomUUID();
+    const requestId = getRequestId(c);
     const rawToken = c.req.param('token');
     const token = parseShareToken(rawToken);
     if (!token) {
@@ -280,7 +281,7 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
   // requests receive 410. This guarantees at-most-one delivery without external
   // locking primitives.
   router.get('/:token/download', async (c) => {
-    const requestId = c.req.header('x-request-id') ?? crypto.randomUUID();
+    const requestId = getRequestId(c);
     const rawToken = c.req.param('token');
     const token = parseShareToken(rawToken);
     if (!token) {
@@ -669,7 +670,7 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
   // Issues a presigned URL for in-browser preview rendering.
   // Prerequisites: file accessible, allowPreview=true, not one-time, MIME in allowlist.
   router.get('/:token/preview', async (c) => {
-    const requestId = c.req.header('x-request-id') ?? crypto.randomUUID();
+    const requestId = getRequestId(c);
     const rawToken = c.req.param('token');
     const token = parseShareToken(rawToken);
     if (!token) {
