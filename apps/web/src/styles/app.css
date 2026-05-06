@@ -1926,27 +1926,6 @@ code {
   letter-spacing: 0.04em;
 }
 
-.about-toc {
-  display: grid;
-  gap: 2px;
-}
-
-.about-toc__link {
-  display: block;
-  padding: 8px 12px;
-  border-radius: 6px;
-  color: var(--muted);
-  font-size: 0.84rem;
-  transition:
-    color 150ms ease,
-    background-color 150ms ease;
-}
-
-.about-toc__link:hover {
-  color: var(--text);
-  background: var(--accent-dim);
-}
-
 /* ── About page responsive ───────────────────────────────────────── */
 
 @media (max-width: 860px) {
