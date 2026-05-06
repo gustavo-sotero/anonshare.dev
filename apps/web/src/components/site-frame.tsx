@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
+import { SiteFooter } from '~/components/site-footer';
 
 type SiteFrameProps = {
   eyebrow: string;
@@ -7,45 +8,48 @@ type SiteFrameProps = {
   summary: string;
   children: ReactNode;
   rail?: ReactNode;
+  noRail?: boolean;
 };
 
-export function SiteFrame({ eyebrow, title, summary, children, rail }: SiteFrameProps) {
+export function SiteFrame({ eyebrow, title, summary, children, rail, noRail }: SiteFrameProps) {
   return (
-    <main className="site-shell">
-      <div className="site-shell__backdrop" aria-hidden="true" />
-
-      <header className="topbar">
-        <div>
+    <>
+      <main className="site-shell">
+        <header className="topbar">
           <Link to="/" className="brand-mark">
             anonshare
           </Link>
-          <p className="brand-note">Anonymous file sharing</p>
+
+          <nav className="topbar__nav" aria-label="Primary">
+            <Link to="/" className="nav-link">
+              Share a file
+            </Link>
+            <Link to="/about" className="nav-link">
+              About
+            </Link>
+          </nav>
+        </header>
+
+        <div className="page-header">
+          <p className="eyebrow">{eyebrow}</p>
+          <h1>{title}</h1>
+          <p className="page-header__summary">{summary}</p>
         </div>
 
-        <nav className="topbar__nav" aria-label="Primary">
-          <Link to="/" className="nav-link">
-            Share a file
-          </Link>
-          <Link to="/about" className="nav-link">
-            About
-          </Link>
-          <Link to="/admin" className="nav-link">
-            Admin
-          </Link>
-        </nav>
-      </header>
+        {noRail ? (
+          <div className="layout-grid layout-grid--single">
+            <section className="stack">{children}</section>
+          </div>
+        ) : (
+          <div className="layout-grid">
+            <section className="stack">{children}</section>
+            <aside className="stack stack--rail">{rail ?? <InfoRail />}</aside>
+          </div>
+        )}
+      </main>
 
-      <section className="hero-card">
-        <p className="eyebrow">{eyebrow}</p>
-        <h1>{title}</h1>
-        <p className="hero-card__summary">{summary}</p>
-      </section>
-
-      <div className="layout-grid">
-        <section className="stack">{children}</section>
-        <aside className="stack stack--rail">{rail ?? <InfoRail />}</aside>
-      </div>
-    </main>
+      <SiteFooter />
+    </>
   );
 }
 

@@ -28,7 +28,7 @@ export function AdminDashboardNav(props: AdminDashboardNavProps) {
       </button>
       <button
         type="button"
-        className={`admin-nav__tab ${activeTab === 'reports' ? 'admin-nav__tab--active' : ''} ${pendingReportsCount > 0 ? 'admin-nav__tab--badge' : ''}`}
+        className={`admin-nav__tab ${activeTab === 'reports' ? 'admin-nav__tab--active' : ''} ${pendingReportsCount > 0 ? 'admin-nav__tab--badge-warning' : ''}`}
         data-badge={pendingReportsCount > 0 ? String(pendingReportsCount) : undefined}
         onClick={() => onSelectTab('reports')}
       >

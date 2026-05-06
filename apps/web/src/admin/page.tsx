@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import { AdminAccessError, getAdminAccessErrorMessage } from '~/admin/access';
 import { AdminDashboardNav } from '~/admin/dashboard-nav';
@@ -22,7 +23,7 @@ import {
   logoutAdmin,
   postAdminJson
 } from '~/admin/transport';
-import { SiteFrame } from '~/components/site-frame';
+import { SiteFooter } from '~/components/site-footer';
 
 type AdminPageProps = {
   loaderData: AdminRouteLoaderData;
@@ -106,7 +107,6 @@ export function AdminPage({ loaderData }: AdminPageProps) {
     const result = await logoutAdmin();
     if (!result.ok) {
       console.warn('[admin] Server-side logout failed; local session cleared.', result.message);
-
       setLogoutWarning(ADMIN_LOGOUT_WARNING_MESSAGE);
     }
 
@@ -134,117 +134,155 @@ export function AdminPage({ loaderData }: AdminPageProps) {
   const pendingReportsCount = state.kind === 'ready' ? state.reportsTotal : 0;
   const anomalyCount = state.kind === 'ready' ? state.anomalies.length : 0;
 
+  if (state.kind === 'loading') {
+    return (
+      <AdminGate>
+        <p className="panel__label">Connecting</p>
+        <p className="panel__copy">
+          Checking the current admin session and loading dashboard data.
+        </p>
+      </AdminGate>
+    );
+  }
+
+  if (state.kind === 'error') {
+    return (
+      <AdminGate>
+        <div className="panel__row">
+          <p className="panel__label">Load failed</p>
+          <span className="chip chip--error">Retry needed</span>
+        </div>
+        <p className="panel__copy">{state.message}</p>
+        <div className="action-row">
+          <button type="button" className="button-link" onClick={refresh}>
+            Try again
+          </button>
+        </div>
+      </AdminGate>
+    );
+  }
+
+  if (state.kind === 'unauthenticated') {
+    return (
+      <AdminGate>
+        <p className="panel__label">Admin access</p>
+        <h1 className="admin-section-title">Sign in to continue.</h1>
+        <p className="panel__copy">
+          The operations dashboard requires authentication with the allowlisted GitHub account.
+        </p>
+        {surfaceMessage ? <p className="upload-error">{surfaceMessage}</p> : null}
+        <button type="button" className="button-link" onClick={handleLogin}>
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 16 16"
+            fill="currentColor"
+            aria-hidden="true"
+            className="admin-login-card__button-icon"
+          >
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
+          </svg>
+          Sign in with GitHub
+        </button>
+      </AdminGate>
+    );
+  }
+
   return (
-    <SiteFrame
-      eyebrow="Operations dashboard"
-      title="System health, moderation, and lifecycle."
-      summary="Authenticated admin view for file management, report triage, download monitoring, queue health, and anomaly backlog."
-      rail={<AdminRail state={state} onLogout={handleLogout} />}
-    >
-      {state.kind === 'loading' && (
-        <section className="panel panel--feature">
-          <p className="panel__label">Connecting</p>
-          <p className="panel__copy">
-            Checking the current admin session and loading dashboard data.
-          </p>
-        </section>
-      )}
-
-      {state.kind === 'unauthenticated' && (
-        <section className="panel panel--feature">
-          <div className="admin-login-card">
-            <p className="panel__label">Admin access</p>
-            <h2 className="admin-section-title">Sign in to continue.</h2>
-            <p className="panel__copy">
-              The operations dashboard requires authentication with the allowlisted GitHub account.
-            </p>
-            {surfaceMessage ? <p className="upload-error">{surfaceMessage}</p> : null}
-            <button type="button" className="button-link" onClick={handleLogin}>
-              Sign in with GitHub
+    <>
+      <div className="admin-shell">
+        <header className="admin-shell__topbar">
+          <div className="admin-shell__brand">
+            <span className="admin-shell__brand-mark">anonshare</span>
+            <span className="admin-shell__brand-label">Admin</span>
+          </div>
+          <div className="admin-shell__topbar-actions">
+            <span className="chip chip--outline">{isRefreshing ? 'Refreshing' : 'Live'}</span>
+            <button
+              type="button"
+              className="button-link button-link--ghost button-link--sm"
+              onClick={refresh}
+              disabled={isRefreshing}
+            >
+              Refresh
+            </button>
+            <button
+              type="button"
+              className="button-link button-link--ghost button-link--sm"
+              onClick={handleLogout}
+            >
+              Sign out
             </button>
           </div>
-        </section>
-      )}
+        </header>
 
-      {state.kind === 'error' && (
-        <section className="panel panel--feature">
-          <div className="panel__row">
-            <p className="panel__label">Load failed</p>
-            <span className="chip chip--error">Retry needed</span>
-          </div>
-          <p className="panel__copy">{state.message}</p>
-          <div className="action-row">
-            <button type="button" className="button-link" onClick={refresh}>
-              Try again
-            </button>
-          </div>
-        </section>
-      )}
-
-      {state.kind === 'ready' && (
-        <>
-          <div className="admin-toolbar">
-            <div className="admin-toolbar__content">
-              <p className="panel__label">Signed in as {state.session.githubLogin}</p>
-            </div>
-            <div className="admin-toolbar__actions">
-              <span className="chip chip--outline">{isRefreshing ? 'Refreshing' : 'Live'}</span>
-              <button
-                type="button"
-                className="button-link button-link--ghost button-link--sm"
-                onClick={refresh}
-                disabled={isRefreshing}
-              >
-                Refresh
-              </button>
-            </div>
-          </div>
-
-          <AdminDashboardNav
-            activeTab={activeTab}
-            anomalyCount={anomalyCount}
-            pendingReportsCount={pendingReportsCount}
-            onSelectTab={setActiveTab}
-          />
-
-          {inspectedFileId ? (
-            <FileInspection
-              fileId={inspectedFileId}
-              onClose={() => setInspectedFileId(null)}
-              onModerate={moderateFile}
-              onAccessLost={handleAccessLost}
+        <div className="admin-shell__body">
+          <nav className="admin-shell__sidebar">
+            <AdminDashboardNav
+              activeTab={activeTab}
+              anomalyCount={anomalyCount}
+              pendingReportsCount={pendingReportsCount}
+              onSelectTab={setActiveTab}
             />
-          ) : null}
+            <AdminRail state={state} onLogout={handleLogout} />
+          </nav>
 
-          {activeTab === 'overview' && <OverviewTab data={state} />}
-          {activeTab === 'files' && (
-            <FilesTab
-              onInspect={setInspectedFileId}
-              onModerate={moderateFile}
-              onAccessLost={handleAccessLost}
-            />
-          )}
-          {activeTab === 'reports' && (
-            <ReportsTab
-              onInspect={setInspectedFileId}
-              onModerateFile={moderateFile}
-              onAccessLost={handleAccessLost}
-            />
-          )}
-          {activeTab === 'downloads' && (
-            <DownloadsTab onInspect={setInspectedFileId} onAccessLost={handleAccessLost} />
-          )}
-          {activeTab === 'storage' && (
-            <StorageTab
-              data={state}
-              onInspect={setInspectedFileId}
-              onAccessLost={handleAccessLost}
-            />
-          )}
-          {activeTab === 'queues' && <QueuesTab data={state} />}
-          {activeTab === 'anomalies' && <AnomaliesTab data={state} />}
-        </>
-      )}
-    </SiteFrame>
+          <main className="admin-shell__content">
+            {inspectedFileId ? (
+              <FileInspection
+                fileId={inspectedFileId}
+                onClose={() => setInspectedFileId(null)}
+                onModerate={moderateFile}
+                onAccessLost={handleAccessLost}
+              />
+            ) : null}
+
+            {activeTab === 'overview' && <OverviewTab data={state} />}
+            {activeTab === 'files' && (
+              <FilesTab
+                onInspect={setInspectedFileId}
+                onModerate={moderateFile}
+                onAccessLost={handleAccessLost}
+              />
+            )}
+            {activeTab === 'reports' && (
+              <ReportsTab
+                onInspect={setInspectedFileId}
+                onModerateFile={moderateFile}
+                onAccessLost={handleAccessLost}
+              />
+            )}
+            {activeTab === 'downloads' && (
+              <DownloadsTab onInspect={setInspectedFileId} onAccessLost={handleAccessLost} />
+            )}
+            {activeTab === 'storage' && (
+              <StorageTab
+                data={state}
+                onInspect={setInspectedFileId}
+                onAccessLost={handleAccessLost}
+              />
+            )}
+            {activeTab === 'queues' && <QueuesTab data={state} />}
+            {activeTab === 'anomalies' && <AnomaliesTab data={state} />}
+          </main>
+        </div>
+      </div>
+
+      <SiteFooter />
+    </>
+  );
+}
+
+function AdminGate({ children }: Readonly<{ children: ReactNode }>) {
+  return (
+    <>
+      <div className="admin-login-screen">
+        <div className="admin-login-card">
+          <p className="admin-login-card__brand">anonshare</p>
+          {children}
+        </div>
+      </div>
+      <SiteFooter />
+    </>
   );
 }

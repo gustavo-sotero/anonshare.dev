@@ -681,7 +681,7 @@ function SharePage() {
     };
 
     return (
-      <SiteFrame eyebrow="File link" title={info.label} summary={info.message}>
+      <SiteFrame eyebrow="File link" title={info.label} summary={info.message} noRail>
         <section className="panel panel--unavailable">
           <div className="unavail-icon" aria-hidden="true">
             {code === 'file_expired' ? '⏳' : code === 'file_consumed' ? '✓' : '⊘'}
@@ -720,7 +720,7 @@ function SharePage() {
     };
 
     return (
-      <SiteFrame eyebrow="File link" title={info.label} summary={info.message}>
+      <SiteFrame eyebrow="File link" title={info.label} summary={info.message} noRail>
         <section className="panel panel--unavailable">
           <div className="unavail-icon" aria-hidden="true">
             {code === 'file_expired' ? '⏳' : code === 'file_consumed' ? '✓' : '⊘'}
@@ -764,6 +764,7 @@ function SharePage() {
       eyebrow="Shared file"
       title={file.filename}
       summary={`${mimeLabel(file.mimeType)} · ${formatBytes(file.sizeBytes)}`}
+      noRail
     >
       {/* ── File metadata ─────────────────────────────────────────────────── */}
       <section className="panel panel--feature">

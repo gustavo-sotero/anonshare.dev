@@ -8,7 +8,7 @@ import {
   RouterProvider
 } from '@tanstack/react-router';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ABOUT_DECISIONS, ABOUT_FACTS, ABOUT_LIMITATIONS, ABOUT_SECTION_LINKS } from './content';
+import { ABOUT_DECISIONS, ABOUT_HERO, ABOUT_LIMITATIONS, ABOUT_SECTION_LINKS } from './content';
 import { AboutPage } from './page';
 
 function escapeHtml(value: string): string {
@@ -21,7 +21,7 @@ function escapeHtml(value: string): string {
 }
 
 describe('About page SSR', () => {
-  it('renders the editorial structure and navigation for the public portfolio page', async () => {
+  it('renders the editorial structure and footer for the public portfolio page', async () => {
     const rootRoute = createRootRoute({
       component: () => <Outlet />
     });
@@ -41,25 +41,18 @@ describe('About page SSR', () => {
 
     const html = renderToStaticMarkup(<RouterProvider router={router} />);
 
-    expect(html).toContain('Anonymous sharing, built to be understood.');
+    expect(html).toContain(ABOUT_HERO.title);
     expect(html).toContain('The problem');
-    expect(html).toContain('Project facts');
-    expect(html).toContain('On this page');
-    expect(html.match(/<h2 class="panel__label"/g)?.length).toBe(13);
+    expect(html).toContain('anonshare — anonymous file sharing. no accounts. no trace.');
+    expect(html).not.toContain('Project facts');
+    expect(html).not.toContain('On this page');
+    expect(html).not.toContain('about-toc__link');
 
     for (const section of ABOUT_SECTION_LINKS) {
-      expect(html).toContain(`href="${section.href}"`);
-      expect(html).toContain(escapeHtml(section.label));
-
       const sectionId = section.href.slice(1);
       expect(html).toContain(`id="${sectionId}"`);
       expect(html).toContain(`aria-labelledby="${sectionId}-heading"`);
       expect(html).toContain(`id="${sectionId}-heading"`);
-    }
-
-    for (const fact of ABOUT_FACTS) {
-      expect(html).toContain(escapeHtml(fact.label));
-      expect(html).toContain(escapeHtml(fact.value));
     }
 
     for (const decision of ABOUT_DECISIONS) {

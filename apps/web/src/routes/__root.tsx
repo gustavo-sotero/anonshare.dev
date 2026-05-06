@@ -11,6 +11,8 @@ export const Route = createRootRoute({
       { name: 'referrer', content: 'strict-origin-when-cross-origin' }
     ],
     links: [
+      { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
+      { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossOrigin: 'anonymous' },
       { rel: 'stylesheet', href: appCss },
       { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' }
     ]

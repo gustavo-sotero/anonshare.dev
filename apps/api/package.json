@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun --env-file=../../.env run --watch src/index.ts",
+    "dev": "cd ../.. && bun --env-file=.env --watch apps/api/src/index.ts",
     "build": "bun build src/index.ts --outdir dist --target bun",
     "start": "bun --env-file=../../.env run dist/index.js",
     "test": "bun test",

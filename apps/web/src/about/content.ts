@@ -26,15 +26,6 @@ export const ABOUT_SECTION_LINKS = [
   { href: '#next', label: 'Next steps' }
 ];
 
-export const ABOUT_FACTS = [
-  { label: 'Type', value: 'Portfolio / R&D' },
-  { label: 'Team', value: 'Solo developer' },
-  { label: 'Public users', value: 'Anonymous upload + download' },
-  { label: 'Admin access', value: 'Single allowlisted GitHub account' },
-  { label: 'Max file', value: '256 MB' },
-  { label: 'Max retention', value: '30 days' }
-];
-
 export const ABOUT_AUDIENCES = [
   {
     eyebrow: 'Primary audience',

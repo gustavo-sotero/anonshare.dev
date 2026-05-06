@@ -5,14 +5,12 @@ import {
   ABOUT_AUDIENCES,
   ABOUT_DECISIONS,
   ABOUT_EXCLUSIONS,
-  ABOUT_FACTS,
   ABOUT_FLOW_STEPS,
   ABOUT_GOALS,
   ABOUT_HERO,
   ABOUT_LIMITATIONS,
   ABOUT_NEXT_STEPS,
   ABOUT_OPERATIONS,
-  ABOUT_SECTION_LINKS,
   ABOUT_STACK
 } from './content';
 
@@ -22,9 +20,9 @@ export function AboutPage() {
       eyebrow={ABOUT_HERO.eyebrow}
       title={ABOUT_HERO.title}
       summary={ABOUT_HERO.summary}
-      rail={<AboutRail />}
+      noRail
     >
-      <section className="panel about-prose" id="problem" aria-labelledby="problem-heading">
+      <section className="about-section" id="problem" aria-labelledby="problem-heading">
         <h2 className="panel__label" id="problem-heading">
           The problem
         </h2>
@@ -45,7 +43,7 @@ export function AboutPage() {
         </p>
       </section>
 
-      <section className="panel panel--muted" id="audience" aria-labelledby="audience-heading">
+      <section className="about-section" id="audience" aria-labelledby="audience-heading">
         <h2 className="panel__label" id="audience-heading">
           Who it serves
         </h2>
@@ -67,7 +65,7 @@ export function AboutPage() {
         </div>
       </section>
 
-      <section className="panel" id="goals" aria-labelledby="goals-heading">
+      <section className="about-section" id="goals" aria-labelledby="goals-heading">
         <h2 className="panel__label" id="goals-heading">
           What v1 optimizes for
         </h2>
@@ -88,7 +86,7 @@ export function AboutPage() {
         </div>
       </section>
 
-      <section className="panel panel--muted" id="flow" aria-labelledby="flow-heading">
+      <section className="about-section" id="flow" aria-labelledby="flow-heading">
         <h2 className="panel__label" id="flow-heading">
           System flow
         </h2>
@@ -143,7 +141,7 @@ export function AboutPage() {
         </div>
       </section>
 
-      <section className="panel panel--muted" id="operations" aria-labelledby="operations-heading">
+      <section className="about-section" id="operations" aria-labelledby="operations-heading">
         <h2 className="panel__label" id="operations-heading">
           Operational controls
         </h2>
@@ -165,9 +163,9 @@ export function AboutPage() {
         </div>
       </section>
 
-      <section className="panel" id="decisions" aria-labelledby="decisions-heading">
+      <section className="about-section" id="decisions" aria-labelledby="decisions-heading">
         <h2 className="panel__label" id="decisions-heading">
-          Key decisions & trade-offs
+          Key decisions &amp; trade-offs
         </h2>
         <div className="about-decisions">
           {ABOUT_DECISIONS.map((entry) => (
@@ -181,7 +179,7 @@ export function AboutPage() {
         </div>
       </section>
 
-      <section className="panel" id="limitations" aria-labelledby="limitations-heading">
+      <section className="about-section" id="limitations" aria-labelledby="limitations-heading">
         <h2 className="panel__label" id="limitations-heading">
           Known limitations
         </h2>
@@ -203,7 +201,7 @@ export function AboutPage() {
         </div>
       </section>
 
-      <section className="panel panel--muted" id="scope" aria-labelledby="scope-heading">
+      <section className="about-section" id="scope" aria-labelledby="scope-heading">
         <h2 className="panel__label" id="scope-heading">
           What's deliberately not in v1
         </h2>
@@ -218,7 +216,7 @@ export function AboutPage() {
         </div>
       </section>
 
-      <section className="panel" id="next" aria-labelledby="next-heading">
+      <section className="about-section" id="next" aria-labelledby="next-heading">
         <h2 className="panel__label" id="next-heading">
           Possible next steps
         </h2>
@@ -359,34 +357,5 @@ function NextItem({
         <span className="about-next-card__impact-label">Impact:</span> {impact}
       </p>
     </article>
-  );
-}
-
-function AboutRail() {
-  return (
-    <>
-      <section className="panel panel--muted">
-        <h2 className="panel__label">Project facts</h2>
-        <div className="status-list">
-          {ABOUT_FACTS.map((fact) => (
-            <div key={fact.label} className="status-item">
-              <span>{fact.label}</span>
-              <strong>{fact.value}</strong>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <nav className="panel panel--muted" aria-label="Page sections">
-        <h2 className="panel__label">On this page</h2>
-        <div className="about-toc">
-          {ABOUT_SECTION_LINKS.map((section) => (
-            <a key={section.href} href={section.href} className="about-toc__link">
-              {section.label}
-            </a>
-          ))}
-        </div>
-      </nav>
-    </>
   );
 }
