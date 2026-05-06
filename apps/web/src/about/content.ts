@@ -26,6 +26,25 @@ export const ABOUT_SECTION_LINKS = [
   { href: '#next', label: 'Next steps' }
 ];
 
+type AboutSupportEnv = Readonly<Record<string, string | undefined>> & {
+  VITE_SUPPORT_WALLET_ADDRESS?: string;
+  VITE_SUPPORT_WALLET_LABEL?: string;
+  VITE_SUPPORT_WALLET_QR_VALUE?: string;
+};
+
+export function getAboutSupportConfig(
+  env: AboutSupportEnv = import.meta.env as AboutSupportEnv
+): null | { address: string; label: string; qrValue: string } {
+  const address = env.VITE_SUPPORT_WALLET_ADDRESS?.trim();
+
+  if (!address) return null;
+
+  const label = env.VITE_SUPPORT_WALLET_LABEL?.trim() || 'Crypto';
+  const qrValue = env.VITE_SUPPORT_WALLET_QR_VALUE?.trim() || address;
+
+  return { address, label, qrValue };
+}
+
 export const ABOUT_AUDIENCES = [
   {
     eyebrow: 'Primary audience',

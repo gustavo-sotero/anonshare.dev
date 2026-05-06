@@ -9,6 +9,7 @@ import {
   ABOUT_OPERATIONS,
   ABOUT_SECTION_LINKS,
   getAboutHead,
+  getAboutSupportConfig,
   getAboutUrl
 } from './content';
 
@@ -40,6 +41,31 @@ describe('getAboutHead', () => {
 });
 
 describe('About content coverage', () => {
+  it('keeps support hidden unless a wallet address is configured', () => {
+    expect(getAboutSupportConfig({})).toBeNull();
+    expect(getAboutSupportConfig({ VITE_SUPPORT_WALLET_ADDRESS: '   ' })).toBeNull();
+  });
+
+  it('normalizes support config and lets QR payload differ from the visible address', () => {
+    expect(
+      getAboutSupportConfig({
+        VITE_SUPPORT_WALLET_ADDRESS: '  bc1qexample123  ',
+        VITE_SUPPORT_WALLET_LABEL: '  BTC  ',
+        VITE_SUPPORT_WALLET_QR_VALUE: '  bitcoin:bc1qexample123  '
+      })
+    ).toEqual({
+      address: 'bc1qexample123',
+      label: 'BTC',
+      qrValue: 'bitcoin:bc1qexample123'
+    });
+
+    expect(getAboutSupportConfig({ VITE_SUPPORT_WALLET_ADDRESS: 'eth-address' })).toEqual({
+      address: 'eth-address',
+      label: 'Crypto',
+      qrValue: 'eth-address'
+    });
+  });
+
   it('covers the main narrative sections required by Module 8', () => {
     expect(ABOUT_SECTION_LINKS.map((entry) => entry.href)).toEqual([
       '#problem',

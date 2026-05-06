@@ -29,7 +29,7 @@ describe('About page SSR', () => {
     const aboutRoute = createRoute({
       getParentRoute: () => rootRoute,
       path: '/about',
-      component: AboutPage
+      component: () => <AboutPage support={null} />
     });
 
     const router = createRouter({
@@ -47,6 +47,7 @@ describe('About page SSR', () => {
     expect(html).not.toContain('Project facts');
     expect(html).not.toContain('On this page');
     expect(html).not.toContain('about-toc__link');
+    expect(html).not.toContain('id="support"');
 
     for (const section of ABOUT_SECTION_LINKS) {
       const sectionId = section.href.slice(1);
@@ -62,5 +63,38 @@ describe('About page SSR', () => {
     for (const limitation of ABOUT_LIMITATIONS) {
       expect(html).toContain(escapeHtml(limitation.title));
     }
+  });
+
+  it('renders the support callout above the main narrative when support config exists', async () => {
+    const rootRoute = createRootRoute({
+      component: () => <Outlet />
+    });
+
+    const aboutRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: '/about',
+      component: () => (
+        <AboutPage
+          support={{
+            address: 'bc1qexample123',
+            label: 'BTC',
+            qrValue: 'bitcoin:bc1qexample123'
+          }}
+        />
+      )
+    });
+
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([aboutRoute]),
+      history: createMemoryHistory({ initialEntries: ['/about'] })
+    });
+
+    await router.load();
+
+    const html = renderToStaticMarkup(<RouterProvider router={router} />);
+
+    expect(html).toContain('id="support"');
+    expect(html).toContain('Help keep anonshare online');
+    expect(html.indexOf('id="support"')).toBeLessThan(html.indexOf('id="problem"'));
   });
 });

@@ -1,4 +1,5 @@
-import { Fragment } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
+import { Fragment, useState } from 'react';
 import { SiteFrame } from '../components/site-frame';
 import {
   ABOUT_ARCHITECTURE,
@@ -11,10 +12,15 @@ import {
   ABOUT_LIMITATIONS,
   ABOUT_NEXT_STEPS,
   ABOUT_OPERATIONS,
-  ABOUT_STACK
+  ABOUT_STACK,
+  getAboutSupportConfig
 } from './content';
 
-export function AboutPage() {
+type AboutSupportConfig = ReturnType<typeof getAboutSupportConfig>;
+
+export function AboutPage({
+  support = getAboutSupportConfig()
+}: Readonly<{ support?: AboutSupportConfig }> = {}) {
   return (
     <SiteFrame
       eyebrow={ABOUT_HERO.eyebrow}
@@ -22,6 +28,8 @@ export function AboutPage() {
       summary={ABOUT_HERO.summary}
       noRail
     >
+      <SupportSection support={support} />
+
       <section className="about-section" id="problem" aria-labelledby="problem-heading">
         <h2 className="panel__label" id="problem-heading">
           The problem
@@ -357,5 +365,108 @@ function NextItem({
         <span className="about-next-card__impact-label">Impact:</span> {impact}
       </p>
     </article>
+  );
+}
+
+function SupportSection({ support }: Readonly<{ support: AboutSupportConfig }>) {
+  if (!support) return null;
+
+  const { address, label, qrValue } = support;
+
+  return (
+    <section
+      className="panel panel--feature about-support"
+      id="support"
+      aria-labelledby="support-heading"
+    >
+      <div className="about-support__header">
+        <span className="about-support__eyebrow">Support this project</span>
+        <h2 className="about-support__headline" id="support-heading">
+          Help keep anonshare online
+        </h2>
+        <p className="about-prose__body about-support__lede">
+          anonshare is a free, non-commercial personal R&amp;D project. If this work has been
+          useful, interesting, or worth following, a small tip helps pay for hosting, storage, and
+          continued development.
+        </p>
+      </div>
+
+      <div className="about-support__card">
+        <div className="about-support__qr">
+          <QRCodeSVG value={qrValue} size={148} bgColor="#f5f4ee" fgColor="#0b0b0d" level="M" />
+        </div>
+        <div className="about-support__info">
+          <span className="about-support__label">{label}</span>
+          <WalletAddress address={address} />
+          <p className="about-support__note">
+            Scan the QR code or copy the wallet address. Every contribution goes directly toward
+            keeping the project live and funding future improvements.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function WalletAddress({ address }: Readonly<{ address: string }>) {
+  const [copied, setCopied] = useState(false);
+
+  function handleCopy() {
+    const clipboard = globalThis.navigator?.clipboard;
+
+    if (!clipboard) return;
+
+    clipboard
+      .writeText(address)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      })
+      .catch(() => {
+        // Clipboard permission denied — button stays idle, no crash.
+      });
+  }
+
+  return (
+    <div className="about-support__address-row">
+      <code className="about-support__address">{address}</code>
+      <button
+        type="button"
+        className="about-support__copy-btn"
+        onClick={handleCopy}
+        aria-label="Copy wallet address"
+      >
+        {copied ? (
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path
+              d="M2 7l3.5 3.5L12 3"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        ) : (
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <rect
+              x="1"
+              y="4"
+              width="9"
+              height="9"
+              rx="1.5"
+              stroke="currentColor"
+              strokeWidth="1.4"
+            />
+            <path
+              d="M4 4V2.5A1.5 1.5 0 015.5 1H11.5A1.5 1.5 0 0113 2.5V8.5A1.5 1.5 0 0111.5 10H10"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+            />
+          </svg>
+        )}
+        <span>{copied ? 'Copied' : 'Copy'}</span>
+      </button>
+    </div>
   );
 }
