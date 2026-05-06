@@ -56,6 +56,13 @@ describe('SiteFrame SSR', () => {
     expect(html).toContain('Feito por Gustavo Sotero');
   });
 
+  it('exposes legal page links in the footer', async () => {
+    const html = await renderSiteFrame();
+
+    expect(html).toContain('href="/terms"');
+    expect(html).toContain('href="/privacy"');
+  });
+
   it('suppresses the informational rail when the noRail variant is requested', async () => {
     const html = await renderSiteFrame({ noRail: true });
 

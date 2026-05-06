@@ -1,11 +1,17 @@
 import { reportReasonValues } from '@anonshare/contracts';
 import { isPreviewSupported } from '@anonshare/domain';
 import { createFileRoute, Link } from '@tanstack/react-router';
+import type { ReactNode } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import { SiteFrame } from '~/components/site-frame';
 import { formatDateDeterministic } from '~/share/date-format';
 import { createInitialSharePageUiState, type ReportReason } from '~/share/page-state';
 import { canReportUnavailableFile } from '~/share/reporting';
+import {
+  getUnavailabilityIcon,
+  getUnavailabilityInfo,
+  type UnavailabilityInfo
+} from '~/share/unavailable-states';
 
 // ─── Loader result type (shared between head, loader, and component) ──────────
 
@@ -136,10 +142,6 @@ function mimeLabel(mimeType: string): string {
   return clean.slice(0, 20);
 }
 
-// ─── Status badge map ─────────────────────────────────────────────────────────
-
-type UnavailabilityInfo = { label: string; message: string };
-
 const TEXT_PREVIEW_MAX_BYTES = 64 * 1024;
 
 const RUNTIME_UNAVAILABLE_CODES = new Set([
@@ -157,33 +159,6 @@ const REPORT_REASON_LABELS: Record<ReportReason, string> = {
   malware: 'Malware or phishing',
   spam: 'Spam',
   other: 'Other'
-};
-
-const UNAVAILABILITY: Record<string, UnavailabilityInfo> = {
-  file_expired: {
-    label: 'Expired',
-    message: 'This file has expired and is no longer available for download.'
-  },
-  file_consumed: {
-    label: 'Already downloaded',
-    message: 'This one-time link has already been used. The file is no longer available.'
-  },
-  file_hidden: {
-    label: 'Unavailable',
-    message: 'This file has been flagged and is temporarily unavailable.'
-  },
-  file_deleted: {
-    label: 'Deleted',
-    message: 'This file has been deleted by the operator and cannot be retrieved.'
-  },
-  file_unavailable: {
-    label: 'Unavailable',
-    message: 'This file is not available right now.'
-  },
-  not_found: {
-    label: 'Not found',
-    message: "This link doesn't match any file we have. It may never have existed."
-  }
 };
 
 const TEXT_PREVIEW_TIMEOUT_MS = 15_000;
@@ -465,6 +440,39 @@ function PublicReportPanel({
   );
 }
 
+// ─── Unavailable file page ────────────────────────────────────────────────────
+
+// Renders the full-page unavailable shell used both by the loader-error path
+// (file state known before mount) and the runtimeUnavailable path (state
+// discovered during an active session). Accepts an optional report panel slot
+// so the caller controls eligibility without coupling this component to report state.
+function UnavailableFilePage({
+  code,
+  info,
+  reportPanel
+}: {
+  code: string;
+  info: UnavailabilityInfo;
+  reportPanel?: ReactNode;
+}) {
+  return (
+    <SiteFrame eyebrow="File link" title={info.label} summary={info.message} noRail>
+      <section className="panel panel--unavailable">
+        <div className="unavail-icon" aria-hidden="true">
+          {getUnavailabilityIcon(code)}
+        </div>
+        <p className="unavail-message">{info.message}</p>
+        <div className="action-row">
+          <Link to="/" className="button-link">
+            Share a new file
+          </Link>
+        </div>
+      </section>
+      {reportPanel}
+    </SiteFrame>
+  );
+}
+
 // ─── Main share page component ────────────────────────────────────────────────
 
 function SharePage() {
@@ -675,79 +683,59 @@ function SharePage() {
   // ── Unavailable state ───────────────────────────────────────────────────────
   if (!loader.ok || !loader.data) {
     const code = loader.errorCode ?? 'file_unavailable';
-    const info: UnavailabilityInfo = UNAVAILABILITY[code] ?? {
-      label: 'Unavailable',
-      message: loader.errorMessage || 'This file is not available right now.'
-    };
+    const info: UnavailabilityInfo = getUnavailabilityInfo(code, loader.errorMessage);
 
     return (
-      <SiteFrame eyebrow="File link" title={info.label} summary={info.message} noRail>
-        <section className="panel panel--unavailable">
-          <div className="unavail-icon" aria-hidden="true">
-            {code === 'file_expired' ? '⏳' : code === 'file_consumed' ? '✓' : '⊘'}
-          </div>
-          <p className="unavail-message">{info.message}</p>
-          <div className="action-row">
-            <Link to="/" className="button-link">
-              Share a new file
-            </Link>
-          </div>
-        </section>
-        {canReportUnavailableFile(code) && (
-          <PublicReportPanel
-            reportOpen={reportOpen}
-            reportReason={reportReason}
-            reportMessage={reportMessage}
-            reportPhase={reportPhase}
-            reportError={reportError}
-            onOpen={() => setReportOpen(true)}
-            onReasonChange={setReportReason}
-            onMessageChange={setReportMessage}
-            onSubmit={submitReport}
-            onCancel={closeReportPanel}
-            copy="If this link contained illegal or harmful content, you can still "
-          />
-        )}
-      </SiteFrame>
+      <UnavailableFilePage
+        code={code}
+        info={info}
+        reportPanel={
+          canReportUnavailableFile(code) ? (
+            <PublicReportPanel
+              reportOpen={reportOpen}
+              reportReason={reportReason}
+              reportMessage={reportMessage}
+              reportPhase={reportPhase}
+              reportError={reportError}
+              onOpen={() => setReportOpen(true)}
+              onReasonChange={setReportReason}
+              onMessageChange={setReportMessage}
+              onSubmit={submitReport}
+              onCancel={closeReportPanel}
+              copy="If this link contained illegal or harmful content, you can still "
+            />
+          ) : undefined
+        }
+      />
     );
   }
 
   if (runtimeUnavailable) {
     const code = runtimeUnavailable.code;
-    const info: UnavailabilityInfo = UNAVAILABILITY[code] ?? {
-      label: 'Unavailable',
-      message: runtimeUnavailable.message || 'This file is not available right now.'
-    };
+    const info: UnavailabilityInfo = getUnavailabilityInfo(code, runtimeUnavailable.message);
 
     return (
-      <SiteFrame eyebrow="File link" title={info.label} summary={info.message} noRail>
-        <section className="panel panel--unavailable">
-          <div className="unavail-icon" aria-hidden="true">
-            {code === 'file_expired' ? '⏳' : code === 'file_consumed' ? '✓' : '⊘'}
-          </div>
-          <p className="unavail-message">{info.message}</p>
-          <div className="action-row">
-            <Link to="/" className="button-link">
-              Share a new file
-            </Link>
-          </div>
-        </section>
-        {canReportUnavailableFile(code) && (
-          <PublicReportPanel
-            reportOpen={reportOpen}
-            reportReason={reportReason}
-            reportMessage={reportMessage}
-            reportPhase={reportPhase}
-            reportError={reportError}
-            onOpen={() => setReportOpen(true)}
-            onReasonChange={setReportReason}
-            onMessageChange={setReportMessage}
-            onSubmit={submitReport}
-            onCancel={closeReportPanel}
-            copy="If this link contained illegal or harmful content, you can still "
-          />
-        )}
-      </SiteFrame>
+      <UnavailableFilePage
+        code={code}
+        info={info}
+        reportPanel={
+          canReportUnavailableFile(code) ? (
+            <PublicReportPanel
+              reportOpen={reportOpen}
+              reportReason={reportReason}
+              reportMessage={reportMessage}
+              reportPhase={reportPhase}
+              reportError={reportError}
+              onOpen={() => setReportOpen(true)}
+              onReasonChange={setReportReason}
+              onMessageChange={setReportMessage}
+              onSubmit={submitReport}
+              onCancel={closeReportPanel}
+              copy="If this link contained illegal or harmful content, you can still "
+            />
+          ) : undefined
+        }
+      />
     );
   }
 
@@ -806,6 +794,13 @@ function SharePage() {
       </section>
 
       {/* ── Consumed notice ───────────────────────────────────────────────── */}
+      {/* Two representations of the consumed state are intentional:
+          1. Full-page unavailable shell: rendered when the loader discovers the file
+             is already consumed before the page mounts (visit after prior download).
+          2. Inline consumed notice (this branch): rendered when the file becomes
+             consumed during the current session, immediately after a successful
+             first download. The inline notice keeps the file metadata visible so
+             the user can confirm what they just downloaded. */}
       {consumed && (
         <section className="panel panel--unavailable">
           <p className="unavail-message">

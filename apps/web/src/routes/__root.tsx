@@ -1,8 +1,11 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
+import { PublicNotFoundPage, PublicUnexpectedErrorPage } from '../errors/public-error-page';
 import appCss from '../styles/app.css?url';
 
 export const Route = createRootRoute({
+  notFoundComponent: PublicNotFoundPage,
+  errorComponent: PublicUnexpectedErrorPage,
   head: () => ({
     meta: [
       { charSet: 'utf-8' },

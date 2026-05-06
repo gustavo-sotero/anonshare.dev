@@ -9,7 +9,7 @@ export const ABOUT_HERO = {
   eyebrow: 'About this project',
   title: 'Anonymous sharing, built to be understood.',
   summary:
-    'anonshare is a non-commercial file-sharing platform built as a portfolio artifact. It demonstrates product thinking, modern architecture, and operational maturity without pretending breadth is the same thing as clarity.'
+    'anonshare is a non-commercial personal R&D project that behaves like a real product: real uploads, enforced access rules, background jobs, moderation controls, and an operator dashboard. It exists to validate a Bun-first stack in a realistic product context and to make the architecture and trade-offs legible to anyone evaluating the technical thinking.'
 };
 
 export const ABOUT_SECTION_LINKS = [
