@@ -13,24 +13,23 @@ export const Route = createFileRoute('/')({
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
-type ExpirationPreset = 'none' | '1h' | '24h' | '7d' | '30d';
+type ExpirationPreset = '1h' | '24h' | '7d' | '30d';
 
 type UploadPhase =
   | { kind: 'idle' }
   | { kind: 'selected'; file: File }
   | { kind: 'uploading'; progress: number }
-  | { kind: 'done'; shareToken: string; shareUrl: string; expiresAt: string | null }
+  | { kind: 'done'; shareToken: string; shareUrl: string; expiresAt: string }
   | { kind: 'error'; message: string; file: File | null };
 
 const EXPIRATION_LABELS: Record<ExpirationPreset, string> = {
-  none: 'No expiration',
   '1h': '1 hour',
   '24h': '24 hours',
   '7d': '7 days',
   '30d': '30 days'
 };
 
-const EXPIRATION_MS: Record<Exclude<ExpirationPreset, 'none'>, number> = {
+const EXPIRATION_MS: Record<ExpirationPreset, number> = {
   '1h': 60 * 60 * 1000,
   '24h': 24 * 60 * 60 * 1000,
   '7d': 7 * 24 * 60 * 60 * 1000,
@@ -44,22 +43,21 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-function expiresAtFromPreset(preset: ExpirationPreset): string | null {
-  if (preset === 'none') return null;
+function expiresAtFromPreset(preset: ExpirationPreset): string {
   return new Date(Date.now() + EXPIRATION_MS[preset]).toISOString();
 }
 
 function uploadFile(
   file: File,
-  options: { oneTime: boolean; allowPreview: boolean; expiresAt: string | null },
+  options: { oneTime: boolean; allowPreview: boolean; expiresAt: string },
   onProgress: (pct: number) => void
-): Promise<{ shareToken: string; shareUrl: string; expiresAt: string | null }> {
+): Promise<{ shareToken: string; shareUrl: string; expiresAt: string }> {
   return new Promise((resolve, reject) => {
     const form = new FormData();
     form.append('file', file);
     form.append('oneTime', String(options.oneTime));
     form.append('allowPreview', String(options.allowPreview));
-    if (options.expiresAt) form.append('expiresAt', options.expiresAt);
+    form.append('expiresAt', options.expiresAt);
 
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/upload');
@@ -82,7 +80,7 @@ function uploadFile(
           const data = (
             parsed as {
               ok: true;
-              data: { shareToken: string; shareUrl: string; expiresAt: string | null };
+              data: { shareToken: string; shareUrl: string; expiresAt: string };
             }
           ).data;
           resolve(data);
@@ -115,7 +113,7 @@ export function HomePage() {
   const [phase, setPhase] = useState<UploadPhase>({ kind: 'idle' });
   const [oneTime, setOneTime] = useState(false);
   const [allowPreview, setAllowPreview] = useState(false);
-  const [expiration, setExpiration] = useState<ExpirationPreset>('none');
+  const [expiration, setExpiration] = useState<ExpirationPreset>('30d');
   const [dragOver, setDragOver] = useState(false);
   const [copied, setCopied] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -194,7 +192,7 @@ export function HomePage() {
     setPhase({ kind: 'idle' });
     setOneTime(false);
     setAllowPreview(false);
-    setExpiration('none');
+    setExpiration('30d');
     setCopied(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
   }, []);
@@ -368,12 +366,10 @@ export function HomePage() {
               <div className="option-row option-row--select">
                 <div className="option-row__text">
                   <span className="option-row__name">Expires after</span>
-                  <span className="option-row__desc">
-                    Maximum 30 days. Leave unset for no expiration.
-                  </span>
+                  <span className="option-row__desc">Files expire after at most 30 days.</span>
                 </div>
                 <div className="expiry-group">
-                  {(['none', '1h', '24h', '7d', '30d'] as ExpirationPreset[]).map((preset) => (
+                  {(['1h', '24h', '7d', '30d'] as ExpirationPreset[]).map((preset) => (
                     <button
                       key={preset}
                       type="button"

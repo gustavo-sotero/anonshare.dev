@@ -149,7 +149,7 @@ describe('uploadResponseSchema', () => {
   const base = {
     shareToken: 'abc123DEF456_ghi-jkl',
     shareUrl: 'https://anonshare.dev/share/abc123DEF456_ghi-jkl',
-    expiresAt: null
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
   };
 
   test('accepts valid response payload', () => {

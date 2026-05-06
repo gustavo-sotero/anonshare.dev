@@ -1,5 +1,5 @@
 import { API_ERROR_CODES, uploadRequestSchema } from '@anonshare/contracts';
-import { MAX_FILE_SIZE_BYTES } from '@anonshare/domain';
+import { getMaxExpirationDate, MAX_FILE_SIZE_BYTES } from '@anonshare/domain';
 import { app as appConfig, loadSystemSettingOrDefault } from '@anonshare/infrastructure/config';
 import type { createDb } from '@anonshare/infrastructure/db';
 import { files } from '@anonshare/infrastructure/db/schema';
@@ -160,7 +160,8 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
    *   file        — the binary file (required)
    *   oneTime     — "true" | "false"  (default "false")
    *   allowPreview — "true" | "false" (default "false")
-   *   expiresAt   — ISO-8601 datetime string, or empty string for no expiration
+   *   expiresAt   — optional ISO-8601 datetime string; when omitted the file
+   *                 defaults to the maximum 30-day lifetime
    *
    * Lifecycle:
    *   1. Validate metadata and file size.
@@ -328,7 +329,9 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
     const token = generateShareToken();
     const objectKey = generateObjectKey();
     const sanitizedFilename = sanitizeFilename(metadata.filename);
-    const expiresAt = metadata.expiresAt ? new Date(metadata.expiresAt) : null;
+    // Always enforce a maximum lifetime. If the uploader did not specify an
+    // expiration, default to MAX_EXPIRATION_DAYS (30 d) so no file lives forever.
+    const expiresAt = metadata.expiresAt ? new Date(metadata.expiresAt) : getMaxExpirationDate();
 
     logger.info('Upload started', {
       event: 'upload.created',
@@ -340,7 +343,7 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
       sizeBytes: metadata.sizeBytes,
       oneTime: metadata.oneTime,
       allowPreview: metadata.allowPreview,
-      expiresAt: expiresAt?.toISOString() ?? null
+      expiresAt: expiresAt.toISOString()
     });
 
     // ── Persist pending record ────────────────────────────────────────────────
@@ -479,7 +482,7 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
     // ── Promote to active ─────────────────────────────────────────────────────
     // Only after both DB record and storage object are confirmed consistent.
     const activatedAt = new Date();
-    const expiredDuringActivation = Boolean(expiresAt && expiresAt <= activatedAt);
+    const expiredDuringActivation = expiresAt <= activatedAt;
     let activatedRecord: Array<{ id: string }>;
     try {
       activatedRecord = await resolveDb()
@@ -571,43 +574,41 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
       status: expiredDuringActivation ? 'expired' : 'active'
     });
 
-    // ── Schedule lifecycle follow-up if applicable ────────────────────────────
+    // ── Schedule lifecycle follow-up ──────────────────────────────────────────
     // Non-fatal: if enqueueing fails, the hourly reconciler will catch the
     // missed expiration or cleanup. The reconciler is the second layer of
     // correctness.
-    if (expiresAt) {
-      if (expiredDuringActivation) {
+    if (expiredDuringActivation) {
+      try {
+        await resolveEnqueueCleanupFile(fileId, objectKey);
+      } catch (err) {
+        logger.warn('Upload: failed to enqueue cleanup for already-expired activation', {
+          event: 'upload_activated',
+          requestId,
+          actor: 'anonymous',
+          entity: { type: 'file', id: token },
+          outcome: 'success',
+          fileId,
+          reason: 'activation_expired_cleanup_enqueue_failed',
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    } else {
+      const delayMs = expiresAt.getTime() - activatedAt.getTime();
+
+      if (delayMs > 0) {
         try {
-          await resolveEnqueueCleanupFile(fileId, objectKey);
+          await resolveEnqueueExpireFile(fileId, delayMs);
         } catch (err) {
-          logger.warn('Upload: failed to enqueue cleanup for already-expired activation', {
+          logger.warn('Upload: failed to enqueue expire-file job — reconciler will handle', {
             event: 'upload_activated',
             requestId,
             actor: 'anonymous',
             entity: { type: 'file', id: token },
             outcome: 'success',
             fileId,
-            reason: 'activation_expired_cleanup_enqueue_failed',
             error: err instanceof Error ? err.message : String(err)
           });
-        }
-      } else {
-        const delayMs = expiresAt.getTime() - activatedAt.getTime();
-
-        if (delayMs > 0) {
-          try {
-            await resolveEnqueueExpireFile(fileId, delayMs);
-          } catch (err) {
-            logger.warn('Upload: failed to enqueue expire-file job — reconciler will handle', {
-              event: 'upload_activated',
-              requestId,
-              actor: 'anonymous',
-              entity: { type: 'file', id: token },
-              outcome: 'success',
-              fileId,
-              error: err instanceof Error ? err.message : String(err)
-            });
-          }
         }
       }
     }
@@ -622,7 +623,7 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
         data: {
           shareToken: token,
           shareUrl,
-          expiresAt: expiresAt?.toISOString() ?? null
+          expiresAt: expiresAt.toISOString()
         }
       },
       201

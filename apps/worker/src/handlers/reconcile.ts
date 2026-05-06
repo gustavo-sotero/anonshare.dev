@@ -5,7 +5,7 @@ import {
   ONE_TIME_DOWNLOAD_CLEANUP_DELAY_MS,
   type ReconcileJobPayload
 } from '@anonshare/contracts';
-import type { OperationalAnomalySeverity } from '@anonshare/domain';
+import { MAX_EXPIRATION_DAYS, type OperationalAnomalySeverity } from '@anonshare/domain';
 import type { createDb } from '@anonshare/infrastructure/db';
 import { files, operationalAnomalies, systemSettings } from '@anonshare/infrastructure/db/schema';
 import type { storageAdapter } from '@anonshare/infrastructure/storage';
@@ -20,6 +20,7 @@ import { logger } from '../logger';
  * This gives normal uploads enough time to complete under slow connections.
  */
 const PENDING_UPLOAD_STALE_THRESHOLD_MS = 10 * 60 * 1_000; // 10 minutes
+const MAX_FILE_LIFETIME_MS = MAX_EXPIRATION_DAYS * 24 * 60 * 60 * 1_000;
 
 /**
  * Only record a stale_expiration anomaly when the file is significantly overdue.
@@ -66,6 +67,7 @@ const ORPHANED_OBJECT_BATCH_SIZE = 100;
 const LIFECYCLE_JOB_OVERDUE_THRESHOLD_MS = 10 * 60 * 1_000; // 10 minutes
 const LIFECYCLE_DUPLICATE_SCAN_LIMIT = 200;
 const LIFECYCLE_QUEUE_READ_TIMEOUT_MS = 3_000;
+const LEGACY_NULL_EXPIRATION_BATCH_SIZE = 100;
 
 const STORAGE_OBJECT_PREFIX = 'objects/';
 const FUTURE_EXPIRATION_CURSOR_SETTING_KEY = 'reconcile_future_expire_cursor';
@@ -194,6 +196,11 @@ async function logStorageCheckFailure(params: {
 
 function isPendingQueueJobState(state: string): boolean {
   return PENDING_QUEUE_JOB_STATES.has(state);
+}
+
+function getDefaultExpirationForUpload(uploadedAt: Date | undefined): Date {
+  const baseTime = uploadedAt?.getTime() ?? Date.now();
+  return new Date(baseTime + MAX_FILE_LIFETIME_MS);
 }
 
 function withTimeout<T>(
@@ -1720,6 +1727,143 @@ export function makeHandleReconcile(deps: ReconcileHandlerDeps) {
           counters.anomaliesRecorded += 1;
         }
       }
+    }
+
+    // ── Pass H: Repair legacy active files without an expiration deadline ──
+    // Older data may still have `expiresAt = null`. Backfill a 30-day deadline
+    // from upload time so the max lifetime and auto-delete guarantees apply.
+    const legacyNullExpirationFiles = await db
+      .select({
+        id: files.id,
+        objectKey: files.objectKey,
+        uploadedAt: files.uploadedAt
+      })
+      .from(files)
+      .where(and(inArray(files.status, ['active', 'expiring']), isNull(files.expiresAt)))
+      .orderBy(asc(files.uploadedAt), asc(files.id))
+      .limit(LEGACY_NULL_EXPIRATION_BATCH_SIZE);
+
+    for (const file of legacyNullExpirationFiles) {
+      const repairedExpiresAt = getDefaultExpirationForUpload(file.uploadedAt ?? undefined);
+
+      if (repairedExpiresAt <= olderThan) {
+        const [updated] = await db
+          .update(files)
+          .set({
+            status: 'expired',
+            expiresAt: repairedExpiresAt
+          })
+          .where(
+            and(
+              eq(files.id, file.id),
+              inArray(files.status, ['active', 'expiring']),
+              isNull(files.expiresAt)
+            )
+          )
+          .returning({ id: files.id });
+
+        if (!updated) {
+          continue;
+        }
+
+        counters.staleExpirationsFixed += 1;
+
+        await cleanupQueue.add(
+          'cleanup-file',
+          { fileId: file.id, objectKey: file.objectKey },
+          {
+            jobId: `cleanup:${file.id}`,
+            attempts: 5,
+            backoff: { type: 'exponential', delay: 1_000 },
+            ...LIFECYCLE_JOB_RETENTION
+          }
+        );
+
+        logger.info('Reconcile: repaired legacy null expiration by expiring file', {
+          event: 'reconciliation.anomaly_detected',
+          actor: 'worker',
+          entity: { type: 'file', id: file.id },
+          outcome: 'success',
+          anomalyType: 'stale_expiration',
+          resolution: 'legacy_deadline_backfilled_and_expired',
+          expiresAt: repairedExpiresAt.toISOString()
+        });
+
+        continue;
+      }
+
+      const [updated] = await db
+        .update(files)
+        .set({ expiresAt: repairedExpiresAt })
+        .where(
+          and(
+            eq(files.id, file.id),
+            inArray(files.status, ['active', 'expiring']),
+            isNull(files.expiresAt)
+          )
+        )
+        .returning({ id: files.id });
+
+      if (!updated) {
+        continue;
+      }
+
+      const delayMs = repairedExpiresAt.getTime() - Date.now();
+      if (delayMs <= 0) {
+        continue;
+      }
+
+      const jobId = `expire:${file.id}`;
+      const existingJobLookup = await getLifecycleJobSafely({
+        db,
+        queue: expireQueue,
+        queueName: 'expire-file',
+        fileId: file.id,
+        jobId
+      });
+      if (!existingJobLookup.ok) {
+        counters.lifecycleQueueReadFailures += 1;
+        if (existingJobLookup.anomalyRecorded) {
+          counters.anomaliesRecorded += 1;
+        }
+        continue;
+      }
+
+      const existingJob = existingJobLookup.value;
+      if (
+        await shouldSkipRepairEnqueue({
+          db,
+          existingJob,
+          queueName: 'expire-file',
+          fileId: file.id
+        })
+      ) {
+        continue;
+      }
+
+      await expireQueue.add(
+        'expire-file',
+        { fileId: file.id },
+        {
+          jobId,
+          delay: delayMs,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5_000 },
+          ...LIFECYCLE_JOB_RETENTION
+        }
+      );
+
+      counters.expireJobsRepaired += 1;
+
+      logger.info('Reconcile: repaired legacy null expiration deadline', {
+        event: 'reconciliation.anomaly_detected',
+        actor: 'worker',
+        entity: { type: 'file', id: file.id },
+        outcome: 'success',
+        anomalyType: 'missing_expire_job',
+        resolution: 'legacy_deadline_backfilled_and_expire_job_enqueued',
+        expiresAt: repairedExpiresAt.toISOString()
+      });
     }
 
     logger.info('Reconciliation completed', {

@@ -6,6 +6,7 @@ import {
   ONE_TIME_DOWNLOAD_CLEANUP_DELAY_MS,
   type ReconcileJobPayload
 } from '@anonshare/contracts';
+import { MAX_EXPIRATION_DAYS } from '@anonshare/domain';
 import type { createDb } from '@anonshare/infrastructure/db';
 import { logger } from '@anonshare/infrastructure/logger';
 import type { Job, Queue } from 'bullmq';
@@ -822,6 +823,75 @@ describe('reconcile handler — Pass B: future expiration job repair', () => {
         entity: { type: 'file', id: 'future-overdue-job' }
       })
     );
+  });
+});
+
+describe('reconcile handler — Pass H: legacy null expiration repair', () => {
+  test('backfills a future expiration for active legacy files and enqueues expire-file', async () => {
+    const now = new Date();
+    const uploadedAt = new Date(now.getTime() - (MAX_EXPIRATION_DAYS - 1) * 24 * 60 * 60 * 1_000);
+    const db: DbStubs = {
+      selectSequence: [
+        [],
+        [],
+        [],
+        [],
+        [],
+        [
+          {
+            id: 'legacy-future',
+            objectKey: 'objects/legacy-future',
+            uploadedAt,
+            expiresAt: null
+          }
+        ]
+      ],
+      updateSequence: [[{ id: 'legacy-future' }]]
+    };
+    const queues: QueueStubs = {};
+    const deps = makeMockDeps(db, {}, queues);
+
+    await makeHandleReconcile(deps)(makeJob({ olderThan: now.toISOString() }));
+
+    expect(queues.capturedExpireAdds).toHaveLength(1);
+    expect(queues.capturedExpireAdds?.[0]?.data.fileId).toBe('legacy-future');
+    expect(queues.capturedExpireAdds?.[0]?.opts.jobId).toBe('expire:legacy-future');
+    expect(queues.capturedCleanupAdds).toHaveLength(0);
+    expect(queues.capturedExpireAdds?.[0]?.opts.delay).toBeGreaterThan(23 * 60 * 60 * 1_000);
+    expect(queues.capturedExpireAdds?.[0]?.opts.delay).toBeLessThanOrEqual(24 * 60 * 60 * 1_000);
+  });
+
+  test('backfills an overdue expiration for active legacy files and enqueues cleanup immediately', async () => {
+    const now = new Date();
+    const uploadedAt = new Date(now.getTime() - (MAX_EXPIRATION_DAYS + 1) * 24 * 60 * 60 * 1_000);
+    const db: DbStubs = {
+      selectSequence: [
+        [],
+        [],
+        [],
+        [],
+        [],
+        [
+          {
+            id: 'legacy-expired',
+            objectKey: 'objects/legacy-expired',
+            uploadedAt,
+            expiresAt: null
+          }
+        ]
+      ],
+      updateSequence: [[{ id: 'legacy-expired' }]]
+    };
+    const queues: QueueStubs = {};
+    const deps = makeMockDeps(db, {}, queues);
+
+    await makeHandleReconcile(deps)(makeJob({ olderThan: now.toISOString() }));
+
+    expect(queues.capturedExpireAdds).toHaveLength(0);
+    expect(queues.capturedCleanupAdds).toHaveLength(1);
+    expect(queues.capturedCleanupAdds?.[0]?.data.fileId).toBe('legacy-expired');
+    expect(queues.capturedCleanupAdds?.[0]?.data.objectKey).toBe('objects/legacy-expired');
+    expect(queues.capturedCleanupAdds?.[0]?.opts.jobId).toBe('cleanup:legacy-expired');
   });
 });
 

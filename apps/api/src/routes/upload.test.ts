@@ -314,7 +314,7 @@ describe('POST /upload — metadata validation', () => {
 // ── Happy-path and lifecycle tests (mock DB + storage) ────────────────────────
 
 describe('POST /upload — successful upload lifecycle', () => {
-  test('returns 201 with shareToken, shareUrl and null expiresAt', async () => {
+  test('returns 201 with shareToken, shareUrl and a default 30-day expiresAt', async () => {
     const app = buildApp(makeMockDeps());
 
     const response = await postUpload(app, {
@@ -330,7 +330,41 @@ describe('POST /upload — successful upload lifecycle', () => {
     expect(body.data.shareToken.length).toBeGreaterThanOrEqual(16);
     expect(body.data.shareUrl).toContain('/share/');
     expect(body.data.shareUrl).toContain(body.data.shareToken);
-    expect(body.data.expiresAt).toBeNull();
+    // No explicit expiration → defaults to 30 days from now
+    expect(typeof body.data.expiresAt).toBe('string');
+    const defaultExpiry = new Date(body.data.expiresAt as string);
+    const thirtyDaysMs = MAX_EXPIRATION_DAYS * 24 * 60 * 60 * 1000;
+    expect(defaultExpiry.getTime()).toBeGreaterThan(Date.now() + thirtyDaysMs - 5_000);
+    expect(defaultExpiry.getTime()).toBeLessThanOrEqual(Date.now() + thirtyDaysMs);
+  });
+
+  test('enqueues expire-file after activation when expiration falls back to the default 30-day limit', async () => {
+    const captured: Array<{ fileId: string; delayMs: number }> = [];
+    const app = buildApp(
+      makeMockDeps(
+        {},
+        {},
+        {
+          captureExpireEnqueue: (fileId, delayMs) => {
+            captured.push({ fileId, delayMs });
+          }
+        }
+      )
+    );
+
+    const response = await postUpload(app, {
+      file: makeFile(),
+      oneTime: false,
+      allowPreview: false
+    });
+
+    expect(response.status).toBe(201);
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.fileId).toBe('test-file-id');
+
+    const thirtyDaysMs = MAX_EXPIRATION_DAYS * 24 * 60 * 60 * 1000;
+    expect(captured[0]?.delayMs).toBeGreaterThan(thirtyDaysMs - 5_000);
+    expect(captured[0]?.delayMs).toBeLessThanOrEqual(thirtyDaysMs);
   });
 
   test('populates expiresAt in the response when an expiration is configured', async () => {

@@ -57,7 +57,7 @@ export const uploadResponseSchema = z.object({
     .max(SHARE_TOKEN_MAX_LENGTH)
     .regex(SHARE_TOKEN_PATTERN),
   shareUrl: z.url(),
-  expiresAt: z.iso.datetime().nullable()
+  expiresAt: z.iso.datetime()
 });
 
 export type UploadResponse = z.infer<typeof uploadResponseSchema>;
