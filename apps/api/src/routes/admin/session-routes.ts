@@ -6,7 +6,7 @@ import type { ResolvedAdminRouterDeps } from './types';
 
 export function registerAdminSessionRoutes(router: Hono, resolvedDeps: ResolvedAdminRouterDeps) {
   router.get('/session', async (c) => {
-    const sessionId = getSessionId(c);
+    const sessionId = await getSessionId(c, resolvedDeps.getSessionSecret());
 
     if (!sessionId) {
       return c.json({ authenticated: false, session: null }, 200);

@@ -11,6 +11,24 @@ const ALLOWED_GITHUB_ID = '99999';
 const ALLOWED_GITHUB_LOGIN = 'allowed-user';
 const SESSION_ID = '00000000-0000-4000-8000-000000000099';
 const APP_BASE_URL = 'https://example.com';
+const TEST_SECRET = 'test-secret';
+
+/**
+ * Generate a Hono-compatible signed cookie value for the given session ID
+ * and secret. The format is `value.{HMAC-SHA256(value, secret) base64}`.
+ */
+async function makeSignedCookieHeader(sessionId: string, secret = TEST_SECRET): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(sessionId));
+  const b64 = btoa(String.fromCodePoint(...new Uint8Array(sig)));
+  return `anonshare_admin_session=${sessionId}.${encodeURIComponent(b64)}`;
+}
 
 type DbInsertResult = { id: string }[];
 
@@ -377,9 +395,10 @@ describe('POST /admin/auth/logout', () => {
     } as unknown as ReturnType<typeof createDb>;
 
     const app = buildApp({ getDb: () => db });
+    const signedCookie = await makeSignedCookieHeader(SESSION_ID);
     const response = await app.request('http://localhost/admin/auth/logout', {
       method: 'POST',
-      headers: { cookie: `anonshare_admin_session=${encodeURIComponent(SESSION_ID)}` }
+      headers: { cookie: signedCookie }
     });
 
     expect(response.status).toBe(200);
@@ -388,20 +407,6 @@ describe('POST /admin/auth/logout', () => {
     expect(response.headers.get('cache-control')).toBe('no-store');
 
     // Cookie is cleared
-    const cookie = response.headers.get('set-cookie') ?? '';
-    expect(cookie).toContain('Max-Age=0');
-  });
-
-  test('revokes session when session id is in x-admin-session-id header', async () => {
-    const app = buildApp();
-    const response = await app.request('http://localhost/admin/auth/logout', {
-      method: 'POST',
-      headers: { 'x-admin-session-id': SESSION_ID }
-    });
-
-    expect(response.status).toBe(200);
-    const body = await response.json();
-    expect(body).toEqual({ ok: true });
     const cookie = response.headers.get('set-cookie') ?? '';
     expect(cookie).toContain('Max-Age=0');
   });
@@ -418,9 +423,10 @@ describe('POST /admin/auth/logout', () => {
     } as unknown as ReturnType<typeof createDb>;
 
     const app = buildApp({ getDb: () => failingDb });
+    const signedCookie = await makeSignedCookieHeader(SESSION_ID);
     const response = await app.request('http://localhost/admin/auth/logout', {
       method: 'POST',
-      headers: { cookie: `anonshare_admin_session=${encodeURIComponent(SESSION_ID)}` }
+      headers: { cookie: signedCookie }
     });
 
     // Graceful degradation: still OK even if DB fails

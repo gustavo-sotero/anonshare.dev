@@ -45,9 +45,28 @@ function makeQueue(
   };
 }
 
+const TEST_SESSION_SECRET = 'test-session-secret-is-32-chars!!';
+
+/**
+ * Compute a Hono-compatible signed cookie value for use in test requests.
+ * Matches the HMAC-SHA256(value, secret) format that setSignedCookie produces.
+ */
+async function makeSignedCookieValue(sessionId: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(TEST_SESSION_SECRET),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(sessionId));
+  const b64 = btoa(String.fromCodePoint(...new Uint8Array(sig)));
+  return `anonshare_admin_session=${sessionId}.${encodeURIComponent(b64)}`;
+}
+
 function buildApp(deps: AdminRouterDeps): Hono {
   const app = new Hono();
-  app.route('/admin', createAdminRouter(deps));
+  app.route('/admin', createAdminRouter({ getSessionSecret: () => TEST_SESSION_SECRET, ...deps }));
   return app;
 }
 
@@ -56,9 +75,16 @@ async function request(
   path: string,
   headers: Record<string, string> = {}
 ): Promise<Response> {
+  const resolvedHeaders = { ...headers };
+  // Transparently convert the legacy test bypass header to a proper signed cookie
+  if ('x-admin-session-id' in resolvedHeaders) {
+    const sessionId = resolvedHeaders['x-admin-session-id'];
+    delete resolvedHeaders['x-admin-session-id'];
+    resolvedHeaders.cookie = await makeSignedCookieValue(sessionId);
+  }
   return app.request(`http://localhost${path}`, {
     method: 'GET',
-    headers
+    headers: resolvedHeaders
   });
 }
 
@@ -132,9 +158,8 @@ describe('GET /admin/session', () => {
       now: () => new Date('2026-03-12T12:00:00Z')
     });
 
-    const response = await request(app, '/admin/session', {
-      cookie: 'anonshare_admin_session=expired-session'
-    });
+    const signedCookie = await makeSignedCookieValue('expired-session');
+    const response = await request(app, '/admin/session', { cookie: signedCookie });
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -646,6 +671,7 @@ function makeAuthDeps(
 ): AdminRouterDeps {
   return {
     findSessionById: async () => makeSession({ id: 'session-1' }),
+    getSessionSecret: () => TEST_SESSION_SECRET,
     getAllowedGithubUserId: () => '123456',
     listAnomalies: async () => [],
     listOpenAnomalyCounts: async () => [],
@@ -668,11 +694,12 @@ async function jsonPost(
   body: unknown,
   headers: Record<string, string> = {}
 ): Promise<Response> {
+  const cookieValue = await makeSignedCookieValue('session-1');
   return app.request(`http://localhost${path}`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-admin-session-id': 'session-1',
+      cookie: cookieValue,
       ...headers
     },
     body: JSON.stringify(body)

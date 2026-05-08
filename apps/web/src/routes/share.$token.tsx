@@ -1,12 +1,19 @@
-import { reportReasonValues } from '@anonshare/contracts';
+import { type FileMetaResponse, reportReasonValues } from '@anonshare/contracts';
 import { isPreviewSupported } from '@anonshare/domain';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import type { ReactNode } from 'react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { SiteFrame } from '~/components/site-frame';
 import { formatDateDeterministic } from '~/share/date-format';
 import { createInitialSharePageUiState, type ReportReason } from '~/share/page-state';
 import { canReportUnavailableFile } from '~/share/reporting';
+import {
+  fetchDownloadUrl,
+  fetchPreviewUrl,
+  fetchShareMeta,
+  refreshShareAvailability,
+  submitShareReport
+} from '~/share/transport';
 import {
   getUnavailabilityIcon,
   getUnavailabilityInfo,
@@ -15,20 +22,8 @@ import {
 
 // ─── Loader result type (shared between head, loader, and component) ──────────
 
-type FileMeta = {
-  shareToken: string;
-  filename: string;
-  mimeType: string;
-  sizeBytes: number;
-  status: string;
-  oneTime: boolean;
-  allowPreview: boolean;
-  expiresAt: string | null;
-  createdAt: string;
-};
-
 type LoaderResult =
-  | { ok: true; status: 200; data: FileMeta; errorCode: null }
+  | { ok: true; status: 200; data: FileMetaResponse; errorCode: null }
   | { ok: false; status: number; data: null; errorCode: string; errorMessage: string };
 
 export function buildSharePageHead(loaderData?: LoaderResult) {
@@ -49,18 +44,16 @@ export function buildSharePageHead(loaderData?: LoaderResult) {
 
 export const Route = createFileRoute('/share/$token')({
   head: ({ loaderData }) => buildSharePageHead(loaderData as LoaderResult | undefined),
-  loader: async ({ params }): Promise<LoaderResult> => {
+  loader: async ({ params, abortController }): Promise<LoaderResult> => {
     // Loader runs isomorphically — detect server vs browser context.
     // On the server during SSR, call the Hono API directly via env URL.
     // On the client during navigation, use the /api proxy path.
     const isServer = typeof window === 'undefined';
     const apiBase = isServer ? (process.env.APP_API_URL ?? 'http://localhost:3001') : '/api';
 
-    let response: Response;
+    let result: Awaited<ReturnType<typeof fetchShareMeta>>;
     try {
-      response = await fetch(`${apiBase}/share/${params.token}`, {
-        headers: { accept: 'application/json' }
-      });
+      result = await fetchShareMeta(apiBase, params.token, abortController.signal);
     } catch {
       return {
         ok: false as const,
@@ -71,58 +64,20 @@ export const Route = createFileRoute('/share/$token')({
       };
     }
 
-    const body = await parseJsonResponse(response);
-
-    // Narrow to typed shapes expected by the component
-    if (response.status === 200 && isOkEnvelope(body)) {
-      return { ok: true as const, status: 200, data: body.data, errorCode: null };
+    if (result.ok) {
+      return { ok: true as const, status: 200, data: result.data, errorCode: null };
     }
-
-    const errorCode = isErrorEnvelope(body) ? body.error.code : 'file_unavailable';
-    const errorMessage = isErrorEnvelope(body) ? body.error.message : 'This file is unavailable.';
 
     return {
       ok: false as const,
-      status: response.status,
+      status: result.status,
       data: null,
-      errorCode,
-      errorMessage
+      errorCode: result.code,
+      errorMessage: result.message
     };
   },
   component: SharePage
 });
-
-async function parseJsonResponse(response: Response): Promise<unknown> {
-  try {
-    return await response.json();
-  } catch {
-    return null;
-  }
-}
-
-// ─── Narrow helpers (cheap runtime checks for typed API bodies) ───────────────
-
-function isOkEnvelope(body: unknown): body is { ok: true; data: FileMeta } {
-  return (
-    typeof body === 'object' &&
-    body !== null &&
-    'ok' in body &&
-    (body as { ok: unknown }).ok === true &&
-    'data' in body
-  );
-}
-
-function isErrorEnvelope(
-  body: unknown
-): body is { ok: false; error: { code: string; message: string } } {
-  return (
-    typeof body === 'object' &&
-    body !== null &&
-    'ok' in body &&
-    (body as { ok: unknown }).ok === false &&
-    'error' in body
-  );
-}
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
@@ -475,7 +430,14 @@ function UnavailableFilePage({
 
 // ─── Main share page component ────────────────────────────────────────────────
 
+// Thin shell: forces a full remount of SharePageContent on every token change.
+// This replaces the previous useEffect-based state reset anti-pattern.
 function SharePage() {
+  const { token } = Route.useParams();
+  return <SharePageContent key={token} />;
+}
+
+function SharePageContent() {
   const { token } = Route.useParams();
   // Cast required: TanStack Router infers useLoaderData() as `never` when the
   // component is defined after the Route object (circular reference at definition
@@ -508,25 +470,11 @@ function SharePage() {
   );
   const [reportError, setReportError] = useState<string | null>(initialUiState.reportError);
 
-  // Reset all token-scoped local state when navigating between share tokens.
-  // This prevents state from token A (consumed, preview, report, etc.) bleeding
-  // into the view for token B within the same route instance.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: token is intentionally in deps to trigger reset on navigation between share pages
-  useEffect(() => {
-    const resetState = createInitialSharePageUiState();
-    setDownloadState(resetState.downloadState);
-    setDownloadError(resetState.downloadError);
-    setPreviewState(resetState.previewState);
-    setPreviewUrl(resetState.previewUrl);
-    setPreviewMime(resetState.previewMime);
-    setConsumed(resetState.consumed);
-    setRuntimeUnavailable(resetState.runtimeUnavailable);
-    setReportOpen(resetState.reportOpen);
-    setReportReason(resetState.reportReason);
-    setReportMessage(resetState.reportMessage);
-    setReportPhase(resetState.reportPhase);
-    setReportError(resetState.reportError);
-  }, [token]);
+  // Abort controllers for in-flight requests so they can be cancelled when the
+  // component unmounts (handled implicitly by key-based remount on token change).
+  const downloadAbortRef = useRef<AbortController | null>(null);
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const reportAbortRef = useRef<AbortController | null>(null);
 
   const closeReportPanel = useCallback(() => {
     setReportOpen(false);
@@ -534,19 +482,38 @@ function SharePage() {
     setReportError(null);
   }, []);
 
+  const refreshAvailability = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        const result = await refreshShareAvailability(token, signal);
+        if (result.ok) {
+          setRuntimeUnavailable(null);
+          return;
+        }
+        if (RUNTIME_UNAVAILABLE_CODES.has(result.code)) {
+          setRuntimeUnavailable({ code: result.code, message: result.message });
+        }
+      } catch {
+        // Best effort only; keep existing UI state on transient refresh failures.
+      }
+    },
+    [token]
+  );
+
   const triggerDownload = useCallback(
     async (filename: string) => {
+      downloadAbortRef.current?.abort();
+      const controller = new AbortController();
+      downloadAbortRef.current = controller;
+
       setDownloadState('fetching');
       setDownloadError(null);
 
       try {
-        const res = await fetch(`/api/share/${token}/download`, {
-          headers: { accept: 'application/json' }
-        });
-        const body = (await res.json()) as unknown;
+        const result = await fetchDownloadUrl(token, controller.signal);
 
-        if (res.ok && isOkEnvelope(body)) {
-          const { url } = body.data as unknown as { url: string };
+        if (result.ok) {
+          const { url } = result.data;
 
           // Programmatic download: create a temporary anchor to force file save.
           // Dynamically created so no focusable element is left in the DOM.
@@ -562,35 +529,32 @@ function SharePage() {
           if (loader?.ok && loader.data?.oneTime) {
             setConsumed(true);
           }
-        } else {
-          if (isErrorEnvelope(body)) {
-            const { code, message } = body.error;
+          return;
+        }
 
-            if (code === 'file_consumed') {
-              setConsumed(true);
-              setDownloadError(null);
-              setDownloadState('idle');
-              return;
-            }
+        const { code, message } = result;
 
-            if (RUNTIME_UNAVAILABLE_CODES.has(code)) {
-              setRuntimeUnavailable({ code, message });
-              setDownloadError(null);
-              setDownloadState('idle');
-              return;
-            }
+        if (code === 'file_consumed') {
+          setConsumed(true);
+          setDownloadError(null);
+          setDownloadState('idle');
+          return;
+        }
 
-            setDownloadError(message);
-            setDownloadState('error');
-            return;
-          }
+        if (RUNTIME_UNAVAILABLE_CODES.has(code)) {
+          setRuntimeUnavailable({ code, message });
+          setDownloadError(null);
+          setDownloadState('idle');
+          return;
+        }
 
-          setDownloadError('Download failed. Please try again.');
+        setDownloadError(message);
+        setDownloadState('error');
+      } catch {
+        if (!controller.signal.aborted) {
+          setDownloadError('Download failed. Please check your connection.');
           setDownloadState('error');
         }
-      } catch {
-        setDownloadError('Download failed. Please check your connection.');
-        setDownloadState('error');
       }
     },
     [token, loader]
@@ -598,82 +562,68 @@ function SharePage() {
 
   const loadPreview = useCallback(async () => {
     if (previewState === 'ready' || previewState === 'loading') return;
+
+    previewAbortRef.current?.abort();
+    const controller = new AbortController();
+    previewAbortRef.current = controller;
+
     setPreviewState('loading');
 
     try {
-      const res = await fetch(`/api/share/${token}/preview`, {
-        headers: { accept: 'application/json' }
-      });
-      const body = (await res.json()) as unknown;
+      const result = await fetchPreviewUrl(token, controller.signal);
 
-      if (res.ok && isOkEnvelope(body)) {
-        const d = body.data as unknown as { url: string; mimeType: string };
-        setPreviewUrl(d.url);
-        setPreviewMime(d.mimeType);
+      if (result.ok) {
+        setPreviewUrl(result.data.url);
+        setPreviewMime(result.data.mimeType);
         setPreviewState('ready');
-      } else {
-        if (isErrorEnvelope(body) && RUNTIME_UNAVAILABLE_CODES.has(body.error.code)) {
-          setRuntimeUnavailable({ code: body.error.code, message: body.error.message });
-          setPreviewState('hidden');
-          return;
-        }
-
-        setPreviewState('error');
-      }
-    } catch {
-      setPreviewState('error');
-    }
-  }, [token, previewState]);
-
-  const refreshAvailability = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/share/${token}`, {
-        headers: { accept: 'application/json' }
-      });
-      const body = (await res.json()) as unknown;
-
-      if (res.ok) {
-        setRuntimeUnavailable(null);
         return;
       }
 
-      if (isErrorEnvelope(body) && RUNTIME_UNAVAILABLE_CODES.has(body.error.code)) {
-        setRuntimeUnavailable({ code: body.error.code, message: body.error.message });
+      if (RUNTIME_UNAVAILABLE_CODES.has(result.code)) {
+        setRuntimeUnavailable({ code: result.code, message: result.message });
+        setPreviewState('hidden');
+        return;
       }
+
+      setPreviewState('error');
     } catch {
-      // Best effort only; keep existing UI state on transient refresh failures.
+      if (!controller.signal.aborted) {
+        setPreviewState('error');
+      }
     }
-  }, [token]);
+  }, [token, previewState]);
 
   const submitReport = useCallback(async () => {
     if (reportPhase === 'submitting') return;
+
+    reportAbortRef.current?.abort();
+    const controller = new AbortController();
+    reportAbortRef.current = controller;
+
     setReportPhase('submitting');
     setReportError(null);
 
     try {
-      const res = await fetch(`/api/report/${token}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', accept: 'application/json' },
-        body: JSON.stringify({
-          reason: reportReason,
-          ...(reportMessage.trim() ? { message: reportMessage.trim() } : {})
-        })
-      });
+      const result = await submitShareReport(
+        token,
+        reportReason,
+        reportMessage.trim() || null,
+        controller.signal
+      );
 
-      if (res.ok) {
+      if (result.ok) {
         setReportPhase('success');
-        void refreshAvailability();
-      } else {
-        const body = (await res.json()) as unknown;
-        const msg = isErrorEnvelope(body)
-          ? body.error.message
-          : 'Failed to submit. Please try again.';
-        setReportError(msg);
+        void refreshAvailability(controller.signal);
+        return;
+      }
+
+      setReportError(result.message);
+      setReportPhase('error');
+    } catch {
+      if (!controller.signal.aborted) {
+        setReportError('Failed to submit. Please check your connection.');
         setReportPhase('error');
       }
-    } catch {
-      setReportError('Failed to submit. Please check your connection.');
-      setReportPhase('error');
     }
   }, [token, reportReason, reportMessage, reportPhase, refreshAvailability]);
 

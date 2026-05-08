@@ -85,6 +85,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify bun.lock is committed
+        run: |
+          if [ ! -f bun.lock ]; then
+            echo "::error::bun.lock is missing from the repository. Run 'bun install' locally and commit the lockfile before merging."
+            exit 1
+          fi
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:

@@ -11,6 +11,19 @@ export type RateLimitResult = {
   resetInSeconds: number;
 };
 
+/**
+ * Origin of the rate-limit decision.
+ * `redis` means the primary Redis counter was used.
+ * `memory-fallback` means Redis was unavailable and the process-local
+ * fixed-window fallback was used instead.  The fallback is NOT shared
+ * across instances and is intentionally conservative.
+ */
+export type RateLimitOrigin = 'redis' | 'memory-fallback';
+
+export type RateLimitOutcome = RateLimitResult & {
+  origin: RateLimitOrigin;
+};
+
 export type DailyRateLimitBlockedCount = {
   day: string;
   count: number;
@@ -87,6 +100,83 @@ export async function checkRateLimit(
     limit,
     resetInSeconds
   };
+}
+
+// ─── In-memory fallback ───────────────────────────────────────────────────────
+
+type MemoryBucket = { count: number; resetAt: number };
+
+/**
+ * Process-local fixed-window store used when Redis is unavailable.
+ * NOT shared across instances — treats the limit conservatively.
+ * Capped at MEMORY_MAX_KEYS entries; expired buckets are evicted when the
+ * map reaches capacity to bound memory usage.
+ */
+const _memoryStore = new Map<string, MemoryBucket>();
+const MEMORY_MAX_KEYS = 10_000;
+
+function checkMemoryRateLimit(
+  key: string,
+  limit: number,
+  windowSeconds: number,
+  now: number = Date.now()
+): RateLimitOutcome {
+  if (_memoryStore.size >= MEMORY_MAX_KEYS) {
+    for (const [k, v] of _memoryStore) {
+      if (v.resetAt <= now) _memoryStore.delete(k);
+    }
+  }
+
+  const existing = _memoryStore.get(key);
+  let bucket: MemoryBucket;
+
+  if (!existing || existing.resetAt <= now) {
+    bucket = { count: 1, resetAt: now + windowSeconds * 1000 };
+    _memoryStore.set(key, bucket);
+  } else {
+    existing.count += 1;
+    bucket = existing;
+  }
+
+  const resetInSeconds = Math.max(0, Math.ceil((bucket.resetAt - now) / 1000));
+  return {
+    limited: bucket.count > limit,
+    count: bucket.count,
+    limit,
+    resetInSeconds,
+    origin: 'memory-fallback'
+  };
+}
+
+/**
+ * Centralised rate-limit check with automatic Redis-failure fallback.
+ *
+ * Returns a `RateLimitOutcome` that includes `origin` so callers can emit
+ * telemetry when the fallback is active.  Callers do NOT need a try/catch —
+ * this function is safe to `await` unconditionally.
+ *
+ * When Redis throws, an in-memory fixed-window counter takes over for the
+ * duration of the outage.  The fallback is per-process and conservative; it
+ * is not a replacement for Redis and must be treated as a degraded mode only.
+ */
+export async function applyRateLimit(
+  redis: Redis,
+  key: string,
+  limit: number,
+  windowSeconds: number,
+  log: { warn: (message: string, ctx: Record<string, unknown>) => void }
+): Promise<RateLimitOutcome> {
+  try {
+    const result = await checkRateLimit(redis, key, limit, windowSeconds);
+    return { ...result, origin: 'redis' };
+  } catch (err) {
+    log.warn('Rate limit degraded: falling back to in-memory counter', {
+      event: 'rate_limit.degraded',
+      key,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return checkMemoryRateLimit(key, limit, windowSeconds);
+  }
 }
 
 export async function recordRateLimitBlocked(

@@ -78,4 +78,13 @@ When a route file or feature module grows beyond ~500 lines, extract supporting 
 
 The directory name must match the original file's import path so that existing `import { ... } from './module'` statements continue to resolve without changes.
 
+### Test organisation for split modules
+
+When splitting a large test file into per-route or per-pass test files, place all new test files in the same directory as the production code:
+
+- Create `test-helpers.ts` (no `.test.` in the name) for shared types, builders, and factories. Bun will not discover it as a test suite.
+- Create one `<route>.test.ts` (or `pass-<x>.test.ts` for worker passes) per logical group of tests.
+- Import shared helpers with `import { ... } from './test-helpers'`.
+- Import the production module under test with `import { ... } from './index'`, not from a parent path.
+
 For TanStack Router routes, prefer route-level `validateSearch` and loaders for typed search parsing and initial data bootstrap. Avoid mount-only Effects whose only purpose is to interpret URL search params or perform the first request that the router can own directly.

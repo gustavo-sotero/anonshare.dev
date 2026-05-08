@@ -91,7 +91,7 @@ describe('environment validation', () => {
     process.env.GITHUB_CLIENT_ID = 'github-client-id';
     process.env.GITHUB_CLIENT_SECRET = 'github-client-secret';
     process.env.GITHUB_ALLOWED_USER_ID = '123456';
-    process.env.SESSION_SECRET = 'session-secret';
+    process.env.SESSION_SECRET = 'session-secret-that-is-at-least-32-chars!';
     process.env.PORT = '3001';
 
     expect(validateApiEnv()).toEqual({
@@ -103,7 +103,7 @@ describe('environment validation', () => {
       githubClientSecret: 'github-client-secret',
       port: 3001,
       redisUrl: 'redis://localhost:6379',
-      sessionSecret: 'session-secret',
+      sessionSecret: 'session-secret-that-is-at-least-32-chars!',
       storageAccessKeyId: 'minioadmin',
       storageBucket: 'anonshare',
       storageEndpoint: 'http://localhost:9000',
@@ -124,7 +124,7 @@ describe('environment validation', () => {
     process.env.GITHUB_CLIENT_ID = 'github-client-id';
     process.env.GITHUB_CLIENT_SECRET = 'github-client-secret';
     process.env.GITHUB_ALLOWED_USER_ID = '123456';
-    process.env.SESSION_SECRET = 'session-secret';
+    process.env.SESSION_SECRET = 'session-secret-that-is-at-least-32-chars!';
     process.env.PORT = 'abc';
 
     expect(() => validateApiEnv()).toThrow('APP_BASE_URL');
@@ -132,6 +132,52 @@ describe('environment validation', () => {
     process.env.APP_BASE_URL = 'http://localhost:3000';
 
     expect(() => validateApiEnv()).toThrow('PORT');
+  });
+
+  test('validateApiEnv rejects non-numeric GITHUB_ALLOWED_USER_ID', () => {
+    process.env.NODE_ENV = 'development';
+    process.env.APP_BASE_URL = 'http://localhost:3000';
+    process.env.DATABASE_URL = 'postgresql://anonshare:anonshare@localhost:5432/anonshare';
+    process.env.REDIS_URL = 'redis://localhost:6379';
+    process.env.STORAGE_ENDPOINT = 'http://localhost:9000';
+    process.env.STORAGE_ACCESS_KEY_ID = 'minioadmin';
+    process.env.STORAGE_SECRET_ACCESS_KEY = 'minioadmin';
+    process.env.STORAGE_BUCKET = 'anonshare';
+    process.env.GITHUB_CLIENT_ID = 'github-client-id';
+    process.env.GITHUB_CLIENT_SECRET = 'github-client-secret';
+    process.env.SESSION_SECRET = 'session-secret-that-is-at-least-32-chars!';
+
+    process.env.GITHUB_ALLOWED_USER_ID = 'not-a-number';
+    expect(() => validateApiEnv()).toThrow('GITHUB_ALLOWED_USER_ID');
+
+    process.env.GITHUB_ALLOWED_USER_ID = '123abc';
+    expect(() => validateApiEnv()).toThrow('GITHUB_ALLOWED_USER_ID');
+
+    process.env.GITHUB_ALLOWED_USER_ID = '99999999';
+    expect(() => validateApiEnv()).not.toThrow();
+  });
+
+  test('validateApiEnv rejects SESSION_SECRET shorter than 32 characters', () => {
+    process.env.NODE_ENV = 'development';
+    process.env.APP_BASE_URL = 'http://localhost:3000';
+    process.env.DATABASE_URL = 'postgresql://anonshare:anonshare@localhost:5432/anonshare';
+    process.env.REDIS_URL = 'redis://localhost:6379';
+    process.env.STORAGE_ENDPOINT = 'http://localhost:9000';
+    process.env.STORAGE_ACCESS_KEY_ID = 'minioadmin';
+    process.env.STORAGE_SECRET_ACCESS_KEY = 'minioadmin';
+    process.env.STORAGE_BUCKET = 'anonshare';
+    process.env.GITHUB_CLIENT_ID = 'github-client-id';
+    process.env.GITHUB_CLIENT_SECRET = 'github-client-secret';
+    process.env.GITHUB_ALLOWED_USER_ID = '123456';
+
+    process.env.SESSION_SECRET = 'too-short';
+    expect(() => validateApiEnv()).toThrow('SESSION_SECRET');
+
+    process.env.SESSION_SECRET = 'a'.repeat(31);
+    expect(() => validateApiEnv()).toThrow('SESSION_SECRET');
+
+    process.env.SESSION_SECRET = 'a'.repeat(32);
+    expect(() => validateApiEnv()).not.toThrow();
   });
 
   test('validateWorkerEnv requires storage and connection settings', () => {

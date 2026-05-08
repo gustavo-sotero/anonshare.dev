@@ -105,6 +105,7 @@ export type QueueStatsReader = {
 
 export type AdminRouterDeps = {
   findSessionById?: (sessionId: string) => Promise<SessionRecord | null>;
+  getSessionSecret?: () => string;
   listAnomalies?: (limit: number) => Promise<AnomalyRecord[]>;
   listOpenAnomalyCounts?: () => Promise<AnomalyCountRecord[]>;
   listReportStatusCounts?: () => Promise<ReportStatusCountRecord[]>;

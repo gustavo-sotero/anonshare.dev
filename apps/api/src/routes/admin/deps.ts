@@ -21,6 +21,7 @@ import type { AdminRouterDeps, ResolvedAdminRouterDeps } from './types';
 export function resolveAdminRouterDeps(deps: AdminRouterDeps = {}): ResolvedAdminRouterDeps {
   return {
     findSessionById: deps.findSessionById ?? defaultFindSessionById,
+    getSessionSecret: deps.getSessionSecret ?? authConfig.sessionSecret,
     listAnomalies: deps.listAnomalies ?? defaultListAnomalies,
     listOpenAnomalyCounts: deps.listOpenAnomalyCounts ?? defaultListOpenAnomalyCounts,
     listReportStatusCounts: deps.listReportStatusCounts ?? defaultListReportStatusCounts,

@@ -451,3 +451,50 @@ export function createStorageAdapter(options: CreateStorageAdapterOptions = {}):
 }
 
 export const storageAdapter = createStorageAdapter();
+
+// ─── Upload confirmation ──────────────────────────────────────────────────────
+
+const STORAGE_CONFIRMATION_ATTEMPTS = 3;
+const STORAGE_CONFIRMATION_RETRY_DELAY_MS = 250;
+
+/**
+ * Verify that a just-uploaded object is readable and has the expected size.
+ * Retries up to STORAGE_CONFIRMATION_ATTEMPTS times with a short back-off to
+ * tolerate eventual-consistency propagation from some S3-compatible providers.
+ *
+ * Throws if the object remains absent or the size does not match after all
+ * attempts.
+ */
+export async function confirmStoredObject(
+  storage: Pick<StorageAdapter, 'head'>,
+  key: string,
+  expectedSizeBytes: number
+): Promise<void> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= STORAGE_CONFIRMATION_ATTEMPTS; attempt += 1) {
+    try {
+      const storedObject = await storage.head(key);
+
+      if (!storedObject) {
+        throw new Error('Storage confirmation returned no object metadata');
+      }
+
+      if (storedObject.contentLength !== expectedSizeBytes) {
+        throw new Error(
+          `Storage confirmation size mismatch: expected ${expectedSizeBytes}, got ${storedObject.contentLength}`
+        );
+      }
+
+      return;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+
+      if (attempt < STORAGE_CONFIRMATION_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, STORAGE_CONFIRMATION_RETRY_DELAY_MS));
+      }
+    }
+  }
+
+  throw lastError ?? new Error('Storage confirmation failed');
+}

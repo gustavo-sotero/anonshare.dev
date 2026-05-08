@@ -3,10 +3,14 @@ import { getMaxExpirationDate, MAX_FILE_SIZE_BYTES } from '@anonshare/domain';
 import { app as appConfig, loadSystemSettingOrDefault } from '@anonshare/infrastructure/config';
 import type { createDb } from '@anonshare/infrastructure/db';
 import { files } from '@anonshare/infrastructure/db/schema';
-import { checkRateLimit, recordRateLimitBlocked } from '@anonshare/infrastructure/rate-limit';
+import { applyRateLimit, recordRateLimitBlocked } from '@anonshare/infrastructure/rate-limit';
 import type { Redis } from '@anonshare/infrastructure/redis';
 import { getRedisClient } from '@anonshare/infrastructure/redis';
-import { StorageError, storageAdapter } from '@anonshare/infrastructure/storage';
+import {
+  confirmStoredObject,
+  StorageError,
+  storageAdapter
+} from '@anonshare/infrastructure/storage';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { logger } from '../logger';
@@ -65,49 +69,12 @@ function sanitizeFilename(raw: string): string {
 
 type UploadStorage = Pick<typeof storageAdapter, 'put' | 'head' | 'delete'>;
 
-const STORAGE_CONFIRMATION_ATTEMPTS = 3;
-const STORAGE_CONFIRMATION_RETRY_DELAY_MS = 250;
-
 function storageErrorContext(err: unknown): Record<string, StorageError['kind']> | undefined {
   if (!(err instanceof StorageError)) {
     return undefined;
   }
 
   return { storageErrorKind: err.kind };
-}
-
-async function confirmStoredObject(
-  storage: UploadStorage,
-  key: string,
-  expectedSizeBytes: number
-): Promise<void> {
-  let lastError: Error | null = null;
-
-  for (let attempt = 1; attempt <= STORAGE_CONFIRMATION_ATTEMPTS; attempt += 1) {
-    try {
-      const storedObject = await storage.head(key);
-
-      if (!storedObject) {
-        throw new Error('Storage confirmation returned no object metadata');
-      }
-
-      if (storedObject.contentLength !== expectedSizeBytes) {
-        throw new Error(
-          `Storage confirmation size mismatch: expected ${expectedSizeBytes}, got ${storedObject.contentLength}`
-        );
-      }
-
-      return;
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-
-      if (attempt < STORAGE_CONFIRMATION_ATTEMPTS) {
-        await new Promise((resolve) => setTimeout(resolve, STORAGE_CONFIRMATION_RETRY_DELAY_MS));
-      }
-    }
-  }
-
-  throw lastError ?? new Error('Storage confirmation failed');
 }
 
 // ─── Router ───────────────────────────────────────────────────────────────────
@@ -181,29 +148,16 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
     const rawIp = c.req.header('x-forwarded-for') ?? c.req.header('x-real-ip');
     const ipHash = await hashIpForRateLimit(rawIp);
     if (ipHash) {
-      let limit: Awaited<ReturnType<typeof checkRateLimit>> | null = null;
+      const uploadRateLimitPerHour = await resolveLoadUploadRateLimit();
+      const limit = await applyRateLimit(
+        resolveGetRedis(),
+        `rl:upload:${ipHash}`,
+        uploadRateLimitPerHour,
+        UPLOAD_RATE_WINDOW_SECONDS,
+        logger
+      );
 
-      try {
-        const uploadRateLimitPerHour = await resolveLoadUploadRateLimit();
-        limit = await checkRateLimit(
-          resolveGetRedis(),
-          `rl:upload:${ipHash}`,
-          uploadRateLimitPerHour,
-          UPLOAD_RATE_WINDOW_SECONDS
-        );
-      } catch (err) {
-        logger.warn('Rate limit degraded: upload', {
-          event: 'rate_limit.degraded',
-          requestId,
-          actor: 'anonymous',
-          entity: { type: 'http_request', id: 'POST /upload' },
-          outcome: 'failure',
-          surface: 'upload',
-          error: err instanceof Error ? err.message : String(err)
-        });
-      }
-
-      if (limit?.limited) {
+      if (limit.limited) {
         logger.warn('Rate limit blocked: upload', {
           event: 'rate_limit.blocked',
           requestId,
@@ -211,6 +165,7 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
           entity: { type: 'http_request', id: 'POST /upload' },
           outcome: 'failure',
           surface: 'upload',
+          origin: limit.origin,
           limit: limit.limit,
           count: limit.count,
           resetInSeconds: limit.resetInSeconds

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AdminAccessError, getAdminAccessErrorMessage } from '~/admin/access';
 import { AdminDashboardNav } from '~/admin/dashboard-nav';
 import { ADMIN_LOGOUT_WARNING_MESSAGE, getAdminSurfaceMessage } from '~/admin/page-state';
@@ -27,17 +27,43 @@ import { SiteFooter } from '~/components/site-footer';
 
 type AdminPageProps = {
   loaderData: AdminRouteLoaderData;
+  initialTab?: AdminTab;
+  initialFileId?: string | null;
+  onNavigate?: (tab: AdminTab, fileId: string | null) => void;
 };
 
-export function AdminPage({ loaderData }: AdminPageProps) {
+export function AdminPage({ loaderData, initialTab, initialFileId, onNavigate }: AdminPageProps) {
   const requestTracker = useRequestTracker();
   const [state, setState] = useState<DashboardState>(() => loaderData.initialState);
   const [refreshKey, setRefreshKey] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<AdminTab>('overview');
-  const [inspectedFileId, setInspectedFileId] = useState<string | null>(null);
+  const [activeTab, setActiveTabState] = useState<AdminTab>(initialTab ?? 'overview');
+  const [inspectedFileId, setInspectedFileIdState] = useState<string | null>(initialFileId ?? null);
   const [loginActionError, setLoginActionError] = useState<string | null>(null);
   const [logoutWarning, setLogoutWarning] = useState<string | null>(null);
+
+  // Refs to always capture the latest dimension values — avoids stale closures
+  // when setActiveTab and setInspectedFileId are called in sequence.
+  const activeTabRef = useRef<AdminTab>(initialTab ?? 'overview');
+  const inspectedFileIdRef = useRef<string | null>(initialFileId ?? null);
+
+  const setActiveTab = useCallback(
+    (tab: AdminTab) => {
+      activeTabRef.current = tab;
+      setActiveTabState(tab);
+      onNavigate?.(tab, inspectedFileIdRef.current);
+    },
+    [onNavigate]
+  );
+
+  const setInspectedFileId = useCallback(
+    (id: string | null) => {
+      inspectedFileIdRef.current = id;
+      setInspectedFileIdState(id);
+      onNavigate?.(activeTabRef.current, id);
+    },
+    [onNavigate]
+  );
 
   useEffect(() => {
     setState(loaderData.initialState);

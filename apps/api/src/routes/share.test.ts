@@ -1236,44 +1236,6 @@ describe('Cache-Control headers', () => {
   });
 });
 
-// ── POST /:token/download/ack ─────────────────────────────────────────────────
-
-describe('POST /share/:token/download/ack', () => {
-  async function ack(app: Hono, token: string): Promise<Response> {
-    return app.request(`http://localhost/share/${token}/download/ack`, { method: 'POST' });
-  }
-
-  test('returns 204 for a valid standard file', async () => {
-    const app = buildApp(makeMockDeps({ findFirst: makeFileRow({ oneTimeDownload: false }) }));
-    const res = await ack(app, 'Abc123defghijkl012');
-
-    expect(res.status).toBe(204);
-  });
-
-  test('returns 204 for unknown token (best-effort, non-blocking)', async () => {
-    const app = buildApp(makeMockDeps({ findFirst: null }));
-    const res = await ack(app, 'Abc123defghijkl012');
-
-    expect(res.status).toBe(204);
-  });
-
-  test('returns 204 for a one-time file (skips duplicate completed event)', async () => {
-    const app = buildApp(
-      makeMockDeps({ findFirst: makeFileRow({ oneTimeDownload: true, status: 'consumed' }) })
-    );
-    const res = await ack(app, 'Abc123defghijkl012');
-
-    expect(res.status).toBe(204);
-  });
-
-  test('returns 204 even when DB query throws (best-effort)', async () => {
-    const app = buildApp(makeMockDeps({ findFirstShouldThrow: true }));
-    const res = await ack(app, 'Abc123defghijkl012');
-
-    expect(res.status).toBe(204);
-  });
-});
-
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 
 describe('GET /share/:token/download — rate limiting', () => {

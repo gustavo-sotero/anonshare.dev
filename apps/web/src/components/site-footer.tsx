@@ -1,3 +1,5 @@
+import { Link } from '@tanstack/react-router';
+
 const EXTERNAL_LINKS = [
   { label: 'Repo', href: 'https://github.com/gsotero/anonshare.dev' },
   { label: 'GitHub', href: 'https://github.com/gsotero' },
@@ -5,9 +7,9 @@ const EXTERNAL_LINKS = [
 ];
 
 const PAGE_LINKS = [
-  { label: 'About', href: '/about' },
-  { label: 'Terms', href: '/terms' },
-  { label: 'Privacy', href: '/privacy' }
+  { label: 'About', to: '/about' as const },
+  { label: 'Terms', to: '/terms' as const },
+  { label: 'Privacy', to: '/privacy' as const }
 ];
 
 export function SiteFooter() {
@@ -21,9 +23,9 @@ export function SiteFooter() {
           {PAGE_LINKS.map((link, index) => (
             <span key={link.label}>
               {index > 0 && <span className="site-footer__sep">·</span>}
-              <a href={link.href} className="site-footer__link">
+              <Link to={link.to} className="site-footer__link">
                 {link.label}
-              </a>
+              </Link>
             </span>
           ))}
         </nav>

@@ -34,14 +34,34 @@ export function getRequestId(c: Context): string {
  * Pseudonymise an IP address for rate-limit keys and download event logging.
  * PRD §8.2: Never store plaintext IPs for anonymous operations.
  *
- * Takes the first IP from a potentially comma-separated X-Forwarded-For value,
- * hashes it with SHA-256, and returns the first 32 hex characters.
+ * Takes the first IP from a potentially comma-separated X-Forwarded-For value.
+ * When a `secret` is provided, computes HMAC-SHA256 keyed with that secret and
+ * a purpose prefix so the hash is purpose-scoped and not invertible via rainbow
+ * tables. Falls back to plain SHA-256 when no secret is given (test paths).
+ *
+ * Returns the first 32 hex characters of the resulting digest.
  */
-export async function hashIp(raw?: string): Promise<string | null> {
+export async function hashIp(raw?: string, secret?: string): Promise<string | null> {
   if (!raw) return null;
   const firstIp = raw.split(',')[0];
   if (!firstIp) return null;
-  const data = new TextEncoder().encode(firstIp.trim());
+  const ip = firstIp.trim();
+
+  if (secret) {
+    const keyData = new TextEncoder().encode(secret);
+    const messageData = new TextEncoder().encode(`ip-privacy:${ip}`);
+    const key = await crypto.subtle.importKey(
+      'raw',
+      keyData,
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+    const signature = await crypto.subtle.sign('HMAC', key, messageData);
+    return Buffer.from(signature).toString('hex').slice(0, 32);
+  }
+
+  const data = new TextEncoder().encode(ip);
   const digest = await crypto.subtle.digest('SHA-256', data);
   return Buffer.from(digest).toString('hex').slice(0, 32);
 }

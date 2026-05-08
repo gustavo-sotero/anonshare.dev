@@ -164,11 +164,35 @@ export const app = {
 
 // ─── Auth (GitHub OAuth) ─────────────────────────────────────────────────────
 
+const SESSION_SECRET_MIN_LENGTH = 32;
+
+function requireNumericId(key: string): string {
+  const value = require(key);
+  if (!/^\d+$/.test(value)) {
+    throw new Error(
+      `[config] Invalid value for environment variable: ${key}. ` +
+        `Expected a numeric GitHub user ID (digits only).`
+    );
+  }
+  return value;
+}
+
+function requireSecretWithMinLength(key: string, minLength: number): string {
+  const value = require(key);
+  if (value.length < minLength) {
+    throw new Error(
+      `[config] Invalid value for environment variable: ${key}. ` +
+        `Must be at least ${minLength} characters for adequate entropy.`
+    );
+  }
+  return value;
+}
+
 export const auth = {
   githubClientId: () => require('GITHUB_CLIENT_ID'),
   githubClientSecret: () => require('GITHUB_CLIENT_SECRET'),
-  githubAllowedUserId: () => require('GITHUB_ALLOWED_USER_ID'),
-  sessionSecret: () => require('SESSION_SECRET')
+  githubAllowedUserId: () => requireNumericId('GITHUB_ALLOWED_USER_ID'),
+  sessionSecret: () => requireSecretWithMinLength('SESSION_SECRET', SESSION_SECRET_MIN_LENGTH)
 } as const;
 
 type ValidatedProcessConfig = {

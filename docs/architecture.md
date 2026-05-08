@@ -29,14 +29,27 @@ Both the API (producer) and worker (consumer) connect to the same Redis instance
 
 ## Route module conventions
 
-Large route files are split into feature-focused modules when they exceed ~500 lines. The admin API uses a directory structure:
+Large route files are split into feature-focused modules when they exceed ~500 lines. Each split uses a co-located directory whose name matches the original file so that existing import paths continue to resolve without changes. The directory must export a single `index.ts` with the same public surface as the original file.
+
+Applied splits in `apps/api/src/routes/`:
 
 - `admin/types.ts` — shared types, constants, and dependency injection contract
 - `admin/helpers.ts` — pure utility functions (formatting, status resolution, anomaly normalisation)
 - `admin/session.ts` — session validation and auth gate
 - `admin/queue-health.ts` — queue health snapshot with timeout and degraded-open fallback
 - `admin/queries.ts` — default database queries and queue accessors
-- `admin/index.ts` — router factory and route handlers
+- `admin/index.ts` — router factory and route handlers (re-exports `createAdminRouter`)
+- `upload/types.ts`, `upload/helpers.ts`, `upload/index.ts` — presigned-upload flow extracted from `upload.ts`
+- `share/types.ts`, `share/helpers.ts`, `share/index.ts` — share page, download, and preview routes extracted from `share.ts`
+
+Applied split in `apps/worker/src/handlers/`:
+
+- `reconcile/types.ts` — shared row and dependency types
+- `reconcile/constants.ts` — shared thresholds
+- `reconcile/helpers.ts` — shared pure helpers
+- `reconcile/index.ts` — handler entry point; individual passes are in `reconcile/pass-*.ts`
+
+Test files for split modules live alongside the production code in the same directory. Shared test builders are placed in a `test-helpers.ts` file (no `.test.` in the name so Bun does not run it as a test suite). Per-route or per-pass test files import from `./test-helpers` and `./index`.
 
 The same pattern applies to the admin web module (`apps/web/src/admin/`) which extracts transport, formatters, and request tracking into separate files.
 Admin web routes should prefer TanStack Router `validateSearch` and route loaders for initial bootstrap and search-param interpretation, leaving Effects for user-initiated refresh or other true client-side synchronization.

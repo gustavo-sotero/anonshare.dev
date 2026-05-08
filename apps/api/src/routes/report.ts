@@ -2,7 +2,7 @@ import { API_ERROR_CODES, reportRequestSchema } from '@anonshare/contracts';
 import { loadSystemSettingOrDefault } from '@anonshare/infrastructure/config';
 import type { createDb } from '@anonshare/infrastructure/db';
 import { fileModerationActions, files, reports } from '@anonshare/infrastructure/db/schema';
-import { checkRateLimit, recordRateLimitBlocked } from '@anonshare/infrastructure/rate-limit';
+import { applyRateLimit, recordRateLimitBlocked } from '@anonshare/infrastructure/rate-limit';
 import type { Redis } from '@anonshare/infrastructure/redis';
 import { getRedisClient } from '@anonshare/infrastructure/redis';
 import { and, eq, sql } from 'drizzle-orm';
@@ -70,77 +70,69 @@ export function createReportRouter(deps: ReportRouterDeps = {}): Hono {
 
     if (ipHash) {
       const redis = resolvedDeps.getRedis();
+      const reportRateLimitPerIp = await resolvedDeps.loadReportRateLimit();
 
-      try {
-        const reportRateLimitPerIp = await resolvedDeps.loadReportRateLimit();
-        const globalLimit = await checkRateLimit(
-          redis,
-          `rl:report:${ipHash}`,
-          reportRateLimitPerIp,
-          REPORT_RATE_WINDOW_SECONDS
-        );
+      const globalLimit = await applyRateLimit(
+        redis,
+        `rl:report:${ipHash}`,
+        reportRateLimitPerIp,
+        REPORT_RATE_WINDOW_SECONDS,
+        logger
+      );
 
-        if (globalLimit.limited) {
-          logger.warn('Rate limit blocked: report (global per-IP)', {
-            event: 'rate_limit.blocked',
-            requestId,
-            actor: 'anonymous',
-            entity: { type: 'http_request', id: `POST /report/${token}` },
-            outcome: 'failure',
-            surface: 'report',
-            limit: globalLimit.limit,
-            count: globalLimit.count,
-            resetInSeconds: globalLimit.resetInSeconds
-          });
-          recordBlockedMetricBestEffort(recordRateLimitBlocked(redis, 'report'), 'report', logger);
-          return c.json(
-            errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many reports. Please try again later.'),
-            429
-          );
-        }
-
-        const fileLimit = await checkRateLimit(
-          redis,
-          `rl:report:${token}:${ipHash}`,
-          REPORT_PER_FILE_RATE_LIMIT,
-          REPORT_RATE_WINDOW_SECONDS
-        );
-
-        if (fileLimit.limited) {
-          logger.warn('Rate limit blocked: report (per-file per-IP)', {
-            event: 'rate_limit.blocked',
-            requestId,
-            actor: 'anonymous',
-            entity: { type: 'http_request', id: `POST /report/${token}` },
-            outcome: 'failure',
-            surface: 'report_per_file',
-            limit: fileLimit.limit,
-            count: fileLimit.count,
-            resetInSeconds: fileLimit.resetInSeconds
-          });
-          recordBlockedMetricBestEffort(
-            recordRateLimitBlocked(redis, 'report_per_file'),
-            'report_per_file',
-            logger
-          );
-          return c.json(
-            errorBody(
-              API_ERROR_CODES.RATE_LIMITED,
-              'You have already reported this file. Please try again later.'
-            ),
-            429
-          );
-        }
-      } catch (err) {
-        logger.warn('Rate limit degraded: report', {
-          event: 'rate_limit.degraded',
+      if (globalLimit.limited) {
+        logger.warn('Rate limit blocked: report (global per-IP)', {
+          event: 'rate_limit.blocked',
           requestId,
           actor: 'anonymous',
           entity: { type: 'http_request', id: `POST /report/${token}` },
           outcome: 'failure',
           surface: 'report',
-          error: err instanceof Error ? err.message : String(err)
+          origin: globalLimit.origin,
+          limit: globalLimit.limit,
+          count: globalLimit.count,
+          resetInSeconds: globalLimit.resetInSeconds
         });
+        recordBlockedMetricBestEffort(recordRateLimitBlocked(redis, 'report'), 'report', logger);
+        return c.json(
+          errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many reports. Please try again later.'),
+          429
+        );
+      }
+
+      const fileLimit = await applyRateLimit(
+        redis,
+        `rl:report:${token}:${ipHash}`,
+        REPORT_PER_FILE_RATE_LIMIT,
+        REPORT_RATE_WINDOW_SECONDS,
+        logger
+      );
+
+      if (fileLimit.limited) {
+        logger.warn('Rate limit blocked: report (per-file per-IP)', {
+          event: 'rate_limit.blocked',
+          requestId,
+          actor: 'anonymous',
+          entity: { type: 'http_request', id: `POST /report/${token}` },
+          outcome: 'failure',
+          surface: 'report_per_file',
+          origin: fileLimit.origin,
+          limit: fileLimit.limit,
+          count: fileLimit.count,
+          resetInSeconds: fileLimit.resetInSeconds
+        });
+        recordBlockedMetricBestEffort(
+          recordRateLimitBlocked(redis, 'report_per_file'),
+          'report_per_file',
+          logger
+        );
+        return c.json(
+          errorBody(
+            API_ERROR_CODES.RATE_LIMITED,
+            'You have already reported this file. Please try again later.'
+          ),
+          429
+        );
       }
     }
 

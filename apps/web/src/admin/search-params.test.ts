@@ -20,7 +20,24 @@ describe('parseAdminSearchParams', () => {
 
   it('discards unrecognized keys', () => {
     const result = parseAdminSearchParams({ error: 'state_expired', tab: 'files', page: 2 });
-    expect(result).toEqual({ error: 'state_expired' });
-    expect(Object.keys(result)).toEqual(['error']);
+    expect(result).toEqual({ error: 'state_expired', tab: 'files' });
+    expect(Object.keys(result)).toEqual(['error', 'tab']);
+  });
+
+  it('discards unknown tab values', () => {
+    const result = parseAdminSearchParams({ tab: 'not_a_tab' });
+    expect(result).toEqual({});
+  });
+
+  it('parses a valid tab value', () => {
+    expect(parseAdminSearchParams({ tab: 'reports' })).toEqual({ tab: 'reports' });
+  });
+
+  it('parses a valid fileId', () => {
+    expect(parseAdminSearchParams({ fileId: 'abc-123' })).toEqual({ fileId: 'abc-123' });
+  });
+
+  it('discards empty fileId', () => {
+    expect(parseAdminSearchParams({ fileId: '' })).toEqual({});
   });
 });

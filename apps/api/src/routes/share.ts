@@ -11,7 +11,7 @@ import {
 import { loadSystemSettingOrDefault } from '@anonshare/infrastructure/config';
 import type { createDb } from '@anonshare/infrastructure/db';
 import { downloadEvents, files } from '@anonshare/infrastructure/db/schema';
-import { checkRateLimit, recordRateLimitBlocked } from '@anonshare/infrastructure/rate-limit';
+import { applyRateLimit, recordRateLimitBlocked } from '@anonshare/infrastructure/rate-limit';
 import type { Redis } from '@anonshare/infrastructure/redis';
 import { getRedisClient } from '@anonshare/infrastructure/redis';
 import type { StorageSignedUrlOptions } from '@anonshare/infrastructure/storage';
@@ -132,76 +132,68 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
     // ── Rate limiting ────────────────────────────────────────────────────────
     const ipHash = await hashIp(rawIp);
     if (ipHash) {
-      try {
-        const shareDownloadRateLimit = await resolveLoadDownloadRateLimit();
-        const limit = await checkRateLimit(
-          resolveGetRedis(),
-          `rl:share:${ipHash}`,
-          shareDownloadRateLimit,
-          SHARE_DOWNLOAD_RATE_WINDOW_SECONDS
-        );
-        if (limit.limited) {
-          logger.warn('Rate limit blocked: share metadata', {
-            event: 'rate_limit.blocked',
-            requestId,
-            actor: 'anonymous',
-            entity: { type: 'http_request', id: `GET /share/${rawToken}` },
-            outcome: 'failure',
-            surface: 'share_metadata',
-            limit: limit.limit,
-            count: limit.count,
-            resetInSeconds: limit.resetInSeconds
-          });
-          recordBlockedMetricBestEffort(
-            recordRateLimitBlocked(resolveGetRedis(), 'share_metadata'),
-            'share_metadata',
-            logger
-          );
-          return c.json(
-            errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
-            429
-          );
-        }
-
-        const tokenLimit = await checkRateLimit(
-          resolveGetRedis(),
-          `rl:share_token:${token}:${ipHash}`,
-          SHARE_TOKEN_RATE_LIMIT,
-          SHARE_TOKEN_RATE_WINDOW_SECONDS
-        );
-
-        if (tokenLimit.limited) {
-          logger.warn('Rate limit blocked: share metadata (per-token)', {
-            event: 'rate_limit.blocked',
-            requestId,
-            actor: 'anonymous',
-            entity: { type: 'http_request', id: `GET /share/${rawToken}` },
-            outcome: 'failure',
-            surface: 'share_metadata_token',
-            limit: tokenLimit.limit,
-            count: tokenLimit.count,
-            resetInSeconds: tokenLimit.resetInSeconds
-          });
-          recordBlockedMetricBestEffort(
-            recordRateLimitBlocked(resolveGetRedis(), 'share_metadata_token'),
-            'share_metadata_token',
-            logger
-          );
-          return c.json(
-            errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
-            429
-          );
-        }
-      } catch (err) {
-        logger.warn('Rate limit degraded: share metadata', {
-          event: 'rate_limit.degraded',
+      const shareDownloadRateLimit = await resolveLoadDownloadRateLimit();
+      const limit = await applyRateLimit(
+        resolveGetRedis(),
+        `rl:share:${ipHash}`,
+        shareDownloadRateLimit,
+        SHARE_DOWNLOAD_RATE_WINDOW_SECONDS,
+        logger
+      );
+      if (limit.limited) {
+        logger.warn('Rate limit blocked: share metadata', {
+          event: 'rate_limit.blocked',
           requestId,
           actor: 'anonymous',
           entity: { type: 'http_request', id: `GET /share/${rawToken}` },
           outcome: 'failure',
           surface: 'share_metadata',
-          error: err instanceof Error ? err.message : String(err)
+          origin: limit.origin,
+          limit: limit.limit,
+          count: limit.count,
+          resetInSeconds: limit.resetInSeconds
         });
+        recordBlockedMetricBestEffort(
+          recordRateLimitBlocked(resolveGetRedis(), 'share_metadata'),
+          'share_metadata',
+          logger
+        );
+        return c.json(
+          errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
+          429
+        );
+      }
+
+      const tokenLimit = await applyRateLimit(
+        resolveGetRedis(),
+        `rl:share_token:${token}:${ipHash}`,
+        SHARE_TOKEN_RATE_LIMIT,
+        SHARE_TOKEN_RATE_WINDOW_SECONDS,
+        logger
+      );
+
+      if (tokenLimit.limited) {
+        logger.warn('Rate limit blocked: share metadata (per-token)', {
+          event: 'rate_limit.blocked',
+          requestId,
+          actor: 'anonymous',
+          entity: { type: 'http_request', id: `GET /share/${rawToken}` },
+          outcome: 'failure',
+          surface: 'share_metadata_token',
+          origin: tokenLimit.origin,
+          limit: tokenLimit.limit,
+          count: tokenLimit.count,
+          resetInSeconds: tokenLimit.resetInSeconds
+        });
+        recordBlockedMetricBestEffort(
+          recordRateLimitBlocked(resolveGetRedis(), 'share_metadata_token'),
+          'share_metadata_token',
+          logger
+        );
+        return c.json(
+          errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
+          429
+        );
       }
     }
 
@@ -294,75 +286,67 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
 
     // ── Rate limiting ────────────────────────────────────────────────────────
     if (ipHash) {
-      try {
-        const shareDownloadRateLimit = await resolveLoadDownloadRateLimit();
-        const limit = await checkRateLimit(
-          resolveGetRedis(),
-          `rl:download:${ipHash}`,
-          shareDownloadRateLimit,
-          SHARE_DOWNLOAD_RATE_WINDOW_SECONDS
-        );
-        if (limit.limited) {
-          logger.warn('Rate limit blocked: download', {
-            event: 'rate_limit.blocked',
-            requestId,
-            actor: 'anonymous',
-            entity: { type: 'http_request', id: `GET /share/${rawToken}/download` },
-            outcome: 'failure',
-            surface: 'download',
-            limit: limit.limit,
-            count: limit.count,
-            resetInSeconds: limit.resetInSeconds
-          });
-          recordBlockedMetricBestEffort(
-            recordRateLimitBlocked(resolveGetRedis(), 'download'),
-            'download',
-            logger
-          );
-          return c.json(
-            errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
-            429
-          );
-        }
-
-        const tokenLimit = await checkRateLimit(
-          resolveGetRedis(),
-          `rl:share_token:${token}:${ipHash}`,
-          SHARE_TOKEN_RATE_LIMIT,
-          SHARE_TOKEN_RATE_WINDOW_SECONDS
-        );
-        if (tokenLimit.limited) {
-          logger.warn('Rate limit blocked: download (per-token)', {
-            event: 'rate_limit.blocked',
-            requestId,
-            actor: 'anonymous',
-            entity: { type: 'http_request', id: `GET /share/${rawToken}/download` },
-            outcome: 'failure',
-            surface: 'download_token',
-            limit: tokenLimit.limit,
-            count: tokenLimit.count,
-            resetInSeconds: tokenLimit.resetInSeconds
-          });
-          recordBlockedMetricBestEffort(
-            recordRateLimitBlocked(resolveGetRedis(), 'download_token'),
-            'download_token',
-            logger
-          );
-          return c.json(
-            errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
-            429
-          );
-        }
-      } catch (err) {
-        logger.warn('Rate limit degraded: download', {
-          event: 'rate_limit.degraded',
+      const shareDownloadRateLimit = await resolveLoadDownloadRateLimit();
+      const limit = await applyRateLimit(
+        resolveGetRedis(),
+        `rl:download:${ipHash}`,
+        shareDownloadRateLimit,
+        SHARE_DOWNLOAD_RATE_WINDOW_SECONDS,
+        logger
+      );
+      if (limit.limited) {
+        logger.warn('Rate limit blocked: download', {
+          event: 'rate_limit.blocked',
           requestId,
           actor: 'anonymous',
           entity: { type: 'http_request', id: `GET /share/${rawToken}/download` },
           outcome: 'failure',
           surface: 'download',
-          error: err instanceof Error ? err.message : String(err)
+          origin: limit.origin,
+          limit: limit.limit,
+          count: limit.count,
+          resetInSeconds: limit.resetInSeconds
         });
+        recordBlockedMetricBestEffort(
+          recordRateLimitBlocked(resolveGetRedis(), 'download'),
+          'download',
+          logger
+        );
+        return c.json(
+          errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
+          429
+        );
+      }
+
+      const tokenLimit = await applyRateLimit(
+        resolveGetRedis(),
+        `rl:share_token:${token}:${ipHash}`,
+        SHARE_TOKEN_RATE_LIMIT,
+        SHARE_TOKEN_RATE_WINDOW_SECONDS,
+        logger
+      );
+      if (tokenLimit.limited) {
+        logger.warn('Rate limit blocked: download (per-token)', {
+          event: 'rate_limit.blocked',
+          requestId,
+          actor: 'anonymous',
+          entity: { type: 'http_request', id: `GET /share/${rawToken}/download` },
+          outcome: 'failure',
+          surface: 'download_token',
+          origin: tokenLimit.origin,
+          limit: tokenLimit.limit,
+          count: tokenLimit.count,
+          resetInSeconds: tokenLimit.resetInSeconds
+        });
+        recordBlockedMetricBestEffort(
+          recordRateLimitBlocked(resolveGetRedis(), 'download_token'),
+          'download_token',
+          logger
+        );
+        return c.json(
+          errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
+          429
+        );
       }
     }
 
@@ -658,14 +642,6 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
     return c.json({ ok: true as const, data: { url: downloadUrl, expiresAt } }, 200);
   });
 
-  // ── POST /:token/download/ack ——————————————————————————————————————
-  // Backward-compatibility no-op for older clients that still post acknowledgments.
-  // Completion is recorded server-side when the presigned URL is issued.
-  router.post('/:token/download/ack', (c) => {
-    c.header('cache-control', 'no-store');
-    return c.body(null, 204);
-  });
-
   // ── GET /:token/preview ─────────────────────────────────────────────────────
   // Issues a presigned URL for in-browser preview rendering.
   // Prerequisites: file accessible, allowPreview=true, not one-time, MIME in allowlist.
@@ -681,79 +657,69 @@ export function createShareRouter(deps: ShareRouterDeps = {}): Hono {
 
     // ── Rate limiting ────────────────────────────────────────────────────────
     const rawIpPreview = c.req.header('x-forwarded-for') ?? c.req.header('x-real-ip');
-    if (rawIpPreview) {
-      const previewIpHash = await hashIp(rawIpPreview);
-      if (previewIpHash) {
-        try {
-          const shareDownloadRateLimit = await resolveLoadDownloadRateLimit();
-          const limit = await checkRateLimit(
-            resolveGetRedis(),
-            `rl:preview:${previewIpHash}`,
-            shareDownloadRateLimit,
-            SHARE_DOWNLOAD_RATE_WINDOW_SECONDS
-          );
-          if (limit.limited) {
-            logger.warn('Rate limit blocked: preview', {
-              event: 'rate_limit.blocked',
-              requestId,
-              actor: 'anonymous',
-              entity: { type: 'http_request', id: `GET /share/${rawToken}/preview` },
-              outcome: 'failure',
-              surface: 'preview',
-              limit: limit.limit,
-              count: limit.count,
-              resetInSeconds: limit.resetInSeconds
-            });
-            recordBlockedMetricBestEffort(
-              recordRateLimitBlocked(resolveGetRedis(), 'preview'),
-              'preview',
-              logger
-            );
-            return c.json(
-              errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
-              429
-            );
-          }
+    const previewIpHash = rawIpPreview ? await hashIp(rawIpPreview) : null;
+    if (previewIpHash) {
+      const shareDownloadRateLimit = await resolveLoadDownloadRateLimit();
+      const limit = await applyRateLimit(
+        resolveGetRedis(),
+        `rl:preview:${previewIpHash}`,
+        shareDownloadRateLimit,
+        SHARE_DOWNLOAD_RATE_WINDOW_SECONDS,
+        logger
+      );
+      if (limit.limited) {
+        logger.warn('Rate limit blocked: preview', {
+          event: 'rate_limit.blocked',
+          requestId,
+          actor: 'anonymous',
+          entity: { type: 'http_request', id: `GET /share/${rawToken}/preview` },
+          outcome: 'failure',
+          surface: 'preview',
+          origin: limit.origin,
+          limit: limit.limit,
+          count: limit.count,
+          resetInSeconds: limit.resetInSeconds
+        });
+        recordBlockedMetricBestEffort(
+          recordRateLimitBlocked(resolveGetRedis(), 'preview'),
+          'preview',
+          logger
+        );
+        return c.json(
+          errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
+          429
+        );
+      }
 
-          const tokenLimit = await checkRateLimit(
-            resolveGetRedis(),
-            `rl:share_token:${token}:${previewIpHash}`,
-            SHARE_TOKEN_RATE_LIMIT,
-            SHARE_TOKEN_RATE_WINDOW_SECONDS
-          );
-          if (tokenLimit.limited) {
-            logger.warn('Rate limit blocked: preview (per-token)', {
-              event: 'rate_limit.blocked',
-              requestId,
-              actor: 'anonymous',
-              entity: { type: 'http_request', id: `GET /share/${rawToken}/preview` },
-              outcome: 'failure',
-              surface: 'preview_token',
-              limit: tokenLimit.limit,
-              count: tokenLimit.count,
-              resetInSeconds: tokenLimit.resetInSeconds
-            });
-            recordBlockedMetricBestEffort(
-              recordRateLimitBlocked(resolveGetRedis(), 'preview_token'),
-              'preview_token',
-              logger
-            );
-            return c.json(
-              errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
-              429
-            );
-          }
-        } catch (err) {
-          logger.warn('Rate limit degraded: preview', {
-            event: 'rate_limit.degraded',
-            requestId,
-            actor: 'anonymous',
-            entity: { type: 'http_request', id: `GET /share/${rawToken}/preview` },
-            outcome: 'failure',
-            surface: 'preview',
-            error: err instanceof Error ? err.message : String(err)
-          });
-        }
+      const tokenLimit = await applyRateLimit(
+        resolveGetRedis(),
+        `rl:share_token:${token}:${previewIpHash}`,
+        SHARE_TOKEN_RATE_LIMIT,
+        SHARE_TOKEN_RATE_WINDOW_SECONDS,
+        logger
+      );
+      if (tokenLimit.limited) {
+        logger.warn('Rate limit blocked: preview (per-token)', {
+          event: 'rate_limit.blocked',
+          requestId,
+          actor: 'anonymous',
+          entity: { type: 'http_request', id: `GET /share/${rawToken}/preview` },
+          outcome: 'failure',
+          surface: 'preview_token',
+          origin: tokenLimit.origin,
+          limit: tokenLimit.limit,
+          count: tokenLimit.count,
+          resetInSeconds: tokenLimit.resetInSeconds
+        });
+        recordBlockedMetricBestEffort(
+          recordRateLimitBlocked(resolveGetRedis(), 'preview_token'),
+          'preview_token',
+          logger
+        );
+        return c.json(
+          errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
+          429
+        );
       }
     }
 

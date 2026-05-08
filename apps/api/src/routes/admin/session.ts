@@ -1,15 +1,16 @@
 import type { Context } from 'hono';
+import { getSignedCookie } from 'hono/cookie';
 import { logger } from '../../logger';
-import { getRequestId, readCookieValue } from '../support';
+import { getRequestId } from '../support';
 import { accessDeniedBody } from './helpers';
 import type { ResolvedAdminRouterDeps, SessionRecord } from './types';
 import { ADMIN_SESSION_COOKIE_NAME } from './types';
 
-export function getSessionId(c: Context): string | null {
-  return (
-    c.req.header('x-admin-session-id') ??
-    readCookieValue(c.req.header('cookie'), ADMIN_SESSION_COOKIE_NAME)
-  );
+export async function getSessionId(c: Context, secret: string): Promise<string | null> {
+  const value = await getSignedCookie(c, secret, ADMIN_SESSION_COOKIE_NAME);
+  // value is string when valid, false when tampered, undefined when absent
+  if (!value) return null;
+  return value;
 }
 
 export async function requireAdminSession(
@@ -17,7 +18,7 @@ export async function requireAdminSession(
   deps: ResolvedAdminRouterDeps
 ): Promise<{ ok: true; session: SessionRecord } | { ok: false; response: Response }> {
   const requestId = getRequestId(c);
-  const sessionId = getSessionId(c);
+  const sessionId = await getSessionId(c, deps.getSessionSecret());
 
   if (!sessionId) {
     logger.warn('Admin access denied: missing session', {

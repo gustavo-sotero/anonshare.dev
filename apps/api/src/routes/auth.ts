@@ -8,10 +8,11 @@ import type { Redis } from '@anonshare/infrastructure/redis';
 import { getRedisClient } from '@anonshare/infrastructure/redis';
 import { eq } from 'drizzle-orm';
 import { type Context, Hono } from 'hono';
+import { deleteCookie, getSignedCookie, setSignedCookie } from 'hono/cookie';
 import { logger } from '../logger';
-import { getRequestId, readCookieValue } from './support';
+import { ADMIN_SESSION_COOKIE_NAME } from './admin/types';
+import { getRequestId } from './support';
 
-const ADMIN_SESSION_COOKIE_NAME = 'anonshare_admin_session';
 const SESSION_DURATION_MS = 24 * 60 * 60 * 1000; // 24 hours
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const GITHUB_AUTHORIZE_URL = 'https://github.com/login/oauth/authorize';
@@ -23,30 +24,6 @@ function generateOAuthState(): string {
   crypto.getRandomValues(bytes);
   const base64 = btoa(String.fromCodePoint(...bytes));
   return base64.replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
-}
-
-function buildSessionCookie(
-  sessionId: string,
-  maxAgeSeconds: number,
-  isProduction: boolean
-): string {
-  const parts = [
-    `${ADMIN_SESSION_COOKIE_NAME}=${encodeURIComponent(sessionId)}`,
-    `Path=/`,
-    `HttpOnly`,
-    `SameSite=Lax`,
-    `Max-Age=${maxAgeSeconds}`
-  ];
-
-  if (isProduction) {
-    parts.push('Secure');
-  }
-
-  return parts.join('; ');
-}
-
-function clearSessionCookie(isProduction: boolean): string {
-  return buildSessionCookie('', 0, isProduction);
 }
 
 function setNoStoreHeaders(c: Context): void {
@@ -359,8 +336,16 @@ export function createAuthRouter(deps: AuthRouterDeps = {}): Hono {
     }
 
     const isProduction = resolvedDeps.getAppEnv() === 'production';
+    const sessionSecret = resolvedDeps.getSessionSecret();
     const maxAgeSeconds = Math.floor(SESSION_DURATION_MS / 1000);
-    const cookie = buildSessionCookie(sessionId, maxAgeSeconds, isProduction);
+
+    await setSignedCookie(c, ADMIN_SESSION_COOKIE_NAME, sessionId, sessionSecret, {
+      path: '/',
+      httpOnly: true,
+      sameSite: 'Lax',
+      maxAge: maxAgeSeconds,
+      ...(isProduction && { secure: true })
+    });
 
     logger.info('Admin login succeeded', {
       event: 'admin.login_succeeded',
@@ -372,7 +357,6 @@ export function createAuthRouter(deps: AuthRouterDeps = {}): Hono {
       githubLogin: githubUser.login
     });
 
-    c.header('set-cookie', cookie);
     return c.redirect(`${resolvedDeps.getAppBaseUrl()}${stateEntry.redirectTo}`);
   });
 
@@ -380,9 +364,8 @@ export function createAuthRouter(deps: AuthRouterDeps = {}): Hono {
   // Revokes the current admin session and clears the cookie.
   router.post('/logout', async (c) => {
     const requestId = getRequestId(c);
-    const sessionId =
-      c.req.header('x-admin-session-id') ??
-      readCookieValue(c.req.header('cookie'), ADMIN_SESSION_COOKIE_NAME);
+    const sessionSecret = resolvedDeps.getSessionSecret();
+    const sessionId = await getSignedCookie(c, sessionSecret, ADMIN_SESSION_COOKIE_NAME);
 
     if (!sessionId) {
       return c.json({ ok: true }, 200);
@@ -412,8 +395,7 @@ export function createAuthRouter(deps: AuthRouterDeps = {}): Hono {
       });
     }
 
-    const isProduction = resolvedDeps.getAppEnv() === 'production';
-    c.header('set-cookie', clearSessionCookie(isProduction));
+    deleteCookie(c, ADMIN_SESSION_COOKIE_NAME, { path: '/' });
     return c.json({ ok: true }, 200);
   });
 
