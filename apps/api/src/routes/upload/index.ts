@@ -1,10 +1,8 @@
 import { API_ERROR_CODES, uploadRequestSchema } from '@anonshare/contracts';
 import { getMaxExpirationDate, MAX_FILE_SIZE_BYTES } from '@anonshare/domain';
 import { app as appConfig, loadSystemSettingOrDefault } from '@anonshare/infrastructure/config';
-import type { createDb } from '@anonshare/infrastructure/db';
 import { files } from '@anonshare/infrastructure/db/schema';
 import { applyRateLimit, recordRateLimitBlocked } from '@anonshare/infrastructure/rate-limit';
-import type { Redis } from '@anonshare/infrastructure/redis';
 import { getRedisClient } from '@anonshare/infrastructure/redis';
 import { confirmStoredObject, storageAdapter } from '@anonshare/infrastructure/storage';
 import { eq } from 'drizzle-orm';

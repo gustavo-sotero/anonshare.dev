@@ -88,3 +88,15 @@ When splitting a large test file into per-route or per-pass test files, place al
 - Import the production module under test with `import { ... } from './index'`, not from a parent path.
 
 For TanStack Router routes, prefer route-level `validateSearch` and loaders for typed search parsing and initial data bootstrap. Avoid mount-only Effects whose only purpose is to interpret URL search params or perform the first request that the router can own directly.
+
+## Admin URL State
+
+The admin dashboard drives all tab navigation, file inspection, and tab-level filter/pagination state through URL search parameters owned by the TanStack Router `validateSearch` function in `routes/admin.tsx`.
+
+- **Read state** by consuming `AdminSearchParams` from the route's `search` object (via `useSearch` or the route component's props).
+- **Write state** by calling `onUpdateSearch(updates: AdminSearchUpdate)` rather than local `useState`.
+- **`AdminSearchParams`** lists every recognised key with its exact type. Unknown keys are silently discarded by `parseAdminSearchParams`.
+- **`AdminSearchUpdate`** is a wider variant that allows explicit `undefined` values, signalling that the corresponding key should be removed from the URL. This is necessary because `exactOptionalPropertyTypes` prevents `Partial<AdminSearchParams>` from accepting `key: undefined` directly.
+- The route-level `handleUpdateSearch` strips `undefined`-valued keys from the outgoing search object before merging, so callers can use `onUpdateSearch?.({ filesDays: undefined })` to clear a filter.
+- `loaderDeps` excludes filter/pagination keys deliberately: tab and fileId drive data re-fetching; filters are applied client-side to the already-loaded dashboard snapshot.
+- Filter button groups use `<fieldset>` + `<legend className="sr-only">` for accessibility compliance. Do not use `<div role="group">` — Biome's `a11y/useSemanticElements` rule rejects it.

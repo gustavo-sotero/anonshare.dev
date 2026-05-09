@@ -1,10 +1,11 @@
 import type { ReactNode } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { AdminAccessError, getAdminAccessErrorMessage } from '~/admin/access';
 import { AdminDashboardNav } from '~/admin/dashboard-nav';
 import { ADMIN_LOGOUT_WARNING_MESSAGE, getAdminSurfaceMessage } from '~/admin/page-state';
 import { runTrackedRequest, useRequestTracker } from '~/admin/request-tracker';
 import type { AdminRouteLoaderData } from '~/admin/route-state';
+import type { AdminSearchParams, AdminSearchUpdate } from '~/admin/search-params';
 import { AdminRail } from '~/admin/tabs/admin-rail';
 import { AnomaliesTab } from '~/admin/tabs/anomalies-tab';
 import { DownloadsTab } from '~/admin/tabs/downloads-tab';
@@ -27,64 +28,49 @@ import { SiteFooter } from '~/components/site-footer';
 
 type AdminPageProps = {
   loaderData: AdminRouteLoaderData;
-  initialTab?: AdminTab;
-  initialFileId?: string | null;
+  activeTab?: AdminTab;
+  inspectedFileId?: string | null;
+  searchState?: AdminSearchParams;
   onNavigate?: (tab: AdminTab, fileId: string | null) => void;
+  onUpdateSearch?: (updates: AdminSearchUpdate) => void;
 };
 
-export function AdminPage({ loaderData, initialTab, initialFileId, onNavigate }: AdminPageProps) {
+export function AdminPage({
+  loaderData,
+  activeTab = 'overview',
+  inspectedFileId = null,
+  searchState,
+  onNavigate,
+  onUpdateSearch
+}: AdminPageProps) {
   const requestTracker = useRequestTracker();
   const [state, setState] = useState<DashboardState>(() => loaderData.initialState);
   const [refreshKey, setRefreshKey] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [activeTab, setActiveTabState] = useState<AdminTab>(initialTab ?? 'overview');
-  const [inspectedFileId, setInspectedFileIdState] = useState<string | null>(initialFileId ?? null);
   const [loginActionError, setLoginActionError] = useState<string | null>(null);
   const [logoutWarning, setLogoutWarning] = useState<string | null>(null);
-
-  // Refs to always capture the latest dimension values — avoids stale closures
-  // when setActiveTab and setInspectedFileId are called in sequence.
-  const activeTabRef = useRef<AdminTab>(initialTab ?? 'overview');
-  const inspectedFileIdRef = useRef<string | null>(initialFileId ?? null);
-
-  const setActiveTab = useCallback(
-    (tab: AdminTab) => {
-      activeTabRef.current = tab;
-      setActiveTabState(tab);
-      onNavigate?.(tab, inspectedFileIdRef.current);
-    },
-    [onNavigate]
-  );
-
-  const setInspectedFileId = useCallback(
-    (id: string | null) => {
-      inspectedFileIdRef.current = id;
-      setInspectedFileIdState(id);
-      onNavigate?.(activeTabRef.current, id);
-    },
-    [onNavigate]
-  );
 
   useEffect(() => {
     setState(loaderData.initialState);
 
     if (loaderData.initialState.kind !== 'ready') {
-      setInspectedFileId(null);
-      setActiveTab('overview');
+      onNavigate?.('overview', null);
     }
 
     setLogoutWarning(null);
-  }, [loaderData.initialState]);
+  }, [loaderData.initialState, onNavigate]);
 
-  const handleAccessLost = useCallback((error: AdminAccessError) => {
-    setInspectedFileId(null);
-    setActiveTab('overview');
-    setLogoutWarning(null);
-    setState({
-      kind: 'unauthenticated',
-      error: getAdminAccessErrorMessage(error.reason)
-    });
-  }, []);
+  const handleAccessLost = useCallback(
+    (error: AdminAccessError) => {
+      onNavigate?.('overview', null);
+      setLogoutWarning(null);
+      setState({
+        kind: 'unauthenticated',
+        error: getAdminAccessErrorMessage(error.reason)
+      });
+    },
+    [onNavigate]
+  );
 
   useEffect(() => {
     if (refreshKey === 0) {
@@ -137,8 +123,7 @@ export function AdminPage({ loaderData, initialTab, initialFileId, onNavigate }:
     }
 
     setState({ kind: 'unauthenticated' });
-    setInspectedFileId(null);
-    setActiveTab('overview');
+    onNavigate?.('overview', null);
   };
 
   const moderateFile = async (fileId: string, action: 'hide' | 'restore' | 'delete') => {
@@ -248,7 +233,7 @@ export function AdminPage({ loaderData, initialTab, initialFileId, onNavigate }:
               activeTab={activeTab}
               anomalyCount={anomalyCount}
               pendingReportsCount={pendingReportsCount}
-              onSelectTab={setActiveTab}
+              onSelectTab={(tab) => onNavigate?.(tab, inspectedFileId)}
             />
             <AdminRail state={state} onLogout={handleLogout} />
           </nav>
@@ -257,7 +242,7 @@ export function AdminPage({ loaderData, initialTab, initialFileId, onNavigate }:
             {inspectedFileId ? (
               <FileInspection
                 fileId={inspectedFileId}
-                onClose={() => setInspectedFileId(null)}
+                onClose={() => onNavigate?.(activeTab, null)}
                 onModerate={moderateFile}
                 onAccessLost={handleAccessLost}
               />
@@ -266,25 +251,36 @@ export function AdminPage({ loaderData, initialTab, initialFileId, onNavigate }:
             {activeTab === 'overview' && <OverviewTab data={state} />}
             {activeTab === 'files' && (
               <FilesTab
-                onInspect={setInspectedFileId}
+                searchState={searchState}
+                onUpdateSearch={onUpdateSearch}
+                onInspect={(id) => onNavigate?.(activeTab, id)}
                 onModerate={moderateFile}
                 onAccessLost={handleAccessLost}
               />
             )}
             {activeTab === 'reports' && (
               <ReportsTab
-                onInspect={setInspectedFileId}
+                searchState={searchState}
+                onUpdateSearch={onUpdateSearch}
+                onInspect={(id) => onNavigate?.(activeTab, id)}
                 onModerateFile={moderateFile}
                 onAccessLost={handleAccessLost}
               />
             )}
             {activeTab === 'downloads' && (
-              <DownloadsTab onInspect={setInspectedFileId} onAccessLost={handleAccessLost} />
+              <DownloadsTab
+                searchState={searchState}
+                onUpdateSearch={onUpdateSearch}
+                onInspect={(id) => onNavigate?.(activeTab, id)}
+                onAccessLost={handleAccessLost}
+              />
             )}
             {activeTab === 'storage' && (
               <StorageTab
                 data={state}
-                onInspect={setInspectedFileId}
+                searchState={searchState}
+                onUpdateSearch={onUpdateSearch}
+                onInspect={(id) => onNavigate?.(activeTab, id)}
                 onAccessLost={handleAccessLost}
               />
             )}

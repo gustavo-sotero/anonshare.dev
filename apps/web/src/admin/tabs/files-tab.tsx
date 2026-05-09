@@ -4,6 +4,7 @@ import { AdminAccessError } from '~/admin/access';
 import { canHideFileStatus, confirmModerationAction } from '~/admin/dashboard';
 import { formatBytes, formatCount, formatDateTime, formatFileStatus } from '~/admin/formatters';
 import { runTrackedRequest, useRequestTracker } from '~/admin/request-tracker';
+import type { AdminSearchParams, AdminSearchUpdate } from '~/admin/search-params';
 import { FILE_PAGE_SIZE, fetchAdminFiles, type OnAdminAccessLost } from '~/admin/transport';
 
 // ─── Filter constants ────────────────────────────────────────────────────────
@@ -47,10 +48,14 @@ const FILE_REPORT_VOLUME_FILTERS = [
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function FilesTab({
+  searchState,
+  onUpdateSearch,
   onInspect,
   onModerate,
   onAccessLost
 }: {
+  searchState?: AdminSearchParams | undefined;
+  onUpdateSearch?: ((updates: AdminSearchUpdate) => void) | undefined;
   onInspect: (fileId: string) => void;
   onModerate: (fileId: string, action: 'hide' | 'restore' | 'delete') => Promise<void>;
   onAccessLost: OnAdminAccessLost;
@@ -58,19 +63,16 @@ export function FilesTab({
   const requestTracker = useRequestTracker();
   const [files, setFiles] = useState<AdminFileSummary[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [statusFilter, setStatusFilter] = useState('');
-  const [policyFilter, setPolicyFilter] = useState<
-    '' | 'standard' | 'one_time' | 'preview_enabled'
-  >('');
-  const [sortBy, setSortBy] = useState<'uploadedAt_desc' | 'sizeBytes_desc' | 'reportCount_desc'>(
-    'uploadedAt_desc'
-  );
-  const [uploadedWithinDays, setUploadedWithinDays] = useState<number | null>(null);
-  const [minReportCount, setMinReportCount] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
+
+  const page = searchState?.filesPage ?? 1;
+  const statusFilter = searchState?.filesStatus ?? '';
+  const policyFilter = searchState?.filesPolicy ?? '';
+  const sortBy = searchState?.filesSortBy ?? 'uploadedAt_desc';
+  const uploadedWithinDays = searchState?.filesDays ?? null;
+  const minReportCount = searchState?.filesMinReports ?? null;
 
   const loadFiles = useCallback(async () => {
     setIsLoading(true);
@@ -148,85 +150,90 @@ export function FilesTab({
         <span className="chip chip--outline">{formatCount(total)} total</span>
       </div>
 
-      <div className="admin-nav">
+      <fieldset className="admin-nav">
+        <legend className="sr-only">Filter files by status</legend>
         {FILE_STATUS_FILTERS.map((f) => (
           <button
             key={f.value}
             type="button"
+            aria-pressed={statusFilter === f.value}
             className={`admin-nav__tab ${statusFilter === f.value ? 'admin-nav__tab--active' : ''}`}
-            onClick={() => {
-              setPage(1);
-              setStatusFilter(f.value);
-            }}
+            onClick={() => onUpdateSearch?.({ filesStatus: f.value, filesPage: 1 })}
           >
             {f.label}
           </button>
         ))}
-      </div>
+      </fieldset>
 
-      <nav className="admin-nav" aria-label="Sort files by">
+      <fieldset className="admin-nav">
+        <legend className="sr-only">Sort files by</legend>
         {FILE_SORT_OPTIONS.map((s) => (
           <button
             key={s.value}
             type="button"
+            aria-pressed={sortBy === s.value}
             className={`admin-nav__tab admin-nav__tab--sm ${sortBy === s.value ? 'admin-nav__tab--active' : ''}`}
-            onClick={() => {
-              setPage(1);
-              setSortBy(s.value);
-            }}
+            onClick={() => onUpdateSearch?.({ filesSortBy: s.value, filesPage: 1 })}
           >
             {s.label}
           </button>
         ))}
-      </nav>
+      </fieldset>
 
-      <nav className="admin-nav" aria-label="Filter files by policy">
+      <fieldset className="admin-nav">
+        <legend className="sr-only">Filter files by policy</legend>
         {FILE_POLICY_FILTERS.map((option) => (
           <button
             key={option.label}
             type="button"
+            aria-pressed={policyFilter === option.value}
             className={`admin-nav__tab admin-nav__tab--sm ${policyFilter === option.value ? 'admin-nav__tab--active' : ''}`}
-            onClick={() => {
-              setPage(1);
-              setPolicyFilter(option.value);
-            }}
+            onClick={() => onUpdateSearch?.({ filesPolicy: option.value, filesPage: 1 })}
           >
             {option.label}
           </button>
         ))}
-      </nav>
+      </fieldset>
 
-      <nav className="admin-nav" aria-label="Filter files by upload date">
-        {FILE_DATE_FILTERS.map((option) => (
-          <button
-            key={option.label}
-            type="button"
-            className={`admin-nav__tab admin-nav__tab--sm ${uploadedWithinDays === (option.value || null) ? 'admin-nav__tab--active' : ''}`}
-            onClick={() => {
-              setPage(1);
-              setUploadedWithinDays(option.value || null);
-            }}
-          >
-            {option.label}
-          </button>
-        ))}
-      </nav>
+      <fieldset className="admin-nav">
+        <legend className="sr-only">Filter files by upload date</legend>
+        {FILE_DATE_FILTERS.map((option) => {
+          const activeVal = option.value || null;
+          return (
+            <button
+              key={option.label}
+              type="button"
+              aria-pressed={uploadedWithinDays === activeVal}
+              className={`admin-nav__tab admin-nav__tab--sm ${uploadedWithinDays === activeVal ? 'admin-nav__tab--active' : ''}`}
+              onClick={() =>
+                onUpdateSearch?.({ filesDays: option.value || undefined, filesPage: 1 })
+              }
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </fieldset>
 
-      <nav className="admin-nav" aria-label="Filter files by report volume">
-        {FILE_REPORT_VOLUME_FILTERS.map((option) => (
-          <button
-            key={option.label}
-            type="button"
-            className={`admin-nav__tab admin-nav__tab--sm ${minReportCount === (option.value || null) ? 'admin-nav__tab--active' : ''}`}
-            onClick={() => {
-              setPage(1);
-              setMinReportCount(option.value || null);
-            }}
-          >
-            {option.label}
-          </button>
-        ))}
-      </nav>
+      <fieldset className="admin-nav">
+        <legend className="sr-only">Filter files by report volume</legend>
+        {FILE_REPORT_VOLUME_FILTERS.map((option) => {
+          const activeVal = option.value || null;
+          return (
+            <button
+              key={option.label}
+              type="button"
+              aria-pressed={minReportCount === activeVal}
+              className={`admin-nav__tab admin-nav__tab--sm ${minReportCount === activeVal ? 'admin-nav__tab--active' : ''}`}
+              onClick={() =>
+                onUpdateSearch?.({ filesMinReports: option.value || undefined, filesPage: 1 })
+              }
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </fieldset>
 
       {error ? <p className="upload-error">{error}</p> : null}
 
@@ -305,7 +312,7 @@ export function FilesTab({
             type="button"
             className="button-link button-link--ghost button-link--sm"
             disabled={page <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            onClick={() => onUpdateSearch?.({ filesPage: Math.max(1, page - 1) })}
           >
             ← Previous
           </button>
@@ -316,7 +323,7 @@ export function FilesTab({
             type="button"
             className="button-link button-link--ghost button-link--sm"
             disabled={page >= totalPages}
-            onClick={() => setPage((p) => p + 1)}
+            onClick={() => onUpdateSearch?.({ filesPage: page + 1 })}
           >
             Next →
           </button>

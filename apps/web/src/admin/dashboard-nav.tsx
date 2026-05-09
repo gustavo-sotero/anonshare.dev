@@ -11,7 +11,7 @@ export function AdminDashboardNav(props: AdminDashboardNavProps) {
   const { activeTab, anomalyCount, pendingReportsCount, onSelectTab } = props;
 
   return (
-    <nav className="admin-nav" aria-label="Dashboard sections" role="tablist">
+    <div className="admin-nav" role="tablist" aria-label="Dashboard sections">
       <button
         type="button"
         role="tab"
@@ -77,6 +77,6 @@ export function AdminDashboardNav(props: AdminDashboardNavProps) {
       >
         Anomalies
       </button>
-    </nav>
+    </div>
   );
 }

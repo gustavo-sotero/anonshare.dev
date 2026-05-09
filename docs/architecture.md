@@ -54,6 +54,15 @@ Test files for split modules live alongside the production code in the same dire
 The same pattern applies to the admin web module (`apps/web/src/admin/`) which extracts transport, formatters, and request tracking into separate files.
 Admin web routes should prefer TanStack Router `validateSearch` and route loaders for initial bootstrap and search-param interpretation, leaving Effects for user-initiated refresh or other true client-side synchronization.
 
+## Admin dashboard URL state
+
+All admin tab navigation and tab-level filter/pagination state lives in URL search parameters, owned by `validateSearch` in `apps/web/src/routes/admin.tsx`. This keeps browser back/forward navigation meaningful and makes filter state shareable via URL.
+
+- `AdminSearchParams` (`apps/web/src/admin/search-params.ts`) defines and validates all recognized search keys. Unrecognized keys are silently stripped.
+- `AdminSearchUpdate` is a wider mapped type (`{ [K]: V | undefined }`) required by `exactOptionalPropertyTypes`; explicit `undefined` values signal "remove this key from the URL" and are stripped in `handleUpdateSearch` before merge.
+- `loaderDeps` only includes navigation keys (`error`) that should actually trigger a data reload. Filter/pagination keys are excluded because filters are applied client-side against the dashboard snapshot without re-fetching.
+- Tab components receive `searchState` and `onUpdateSearch` as optional props forwarded from the route. They derive filter/page values from `searchState` (with sensible defaults) and call `onUpdateSearch` on user interaction instead of managing local state.
+
 ## Configuration policy
 
 - A single root `.env` file is the source of truth for all process runtime configuration.

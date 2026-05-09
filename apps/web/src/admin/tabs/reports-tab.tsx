@@ -9,6 +9,7 @@ import {
   formatReportUrgency
 } from '~/admin/formatters';
 import { runTrackedRequest, useRequestTracker } from '~/admin/request-tracker';
+import type { AdminSearchParams, AdminSearchUpdate } from '~/admin/search-params';
 import {
   extractErrorMessage,
   fetchAdminReports,
@@ -44,10 +45,14 @@ const REPORT_URGENCY_FILTERS = [
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function ReportsTab({
+  searchState,
+  onUpdateSearch,
   onInspect,
   onModerateFile,
   onAccessLost
 }: {
+  searchState?: AdminSearchParams | undefined;
+  onUpdateSearch?: ((updates: AdminSearchUpdate) => void) | undefined;
   onInspect: (fileId: string) => void;
   onModerateFile: (fileId: string, action: 'hide' | 'restore' | 'delete') => Promise<void>;
   onAccessLost: OnAdminAccessLost;
@@ -55,15 +60,14 @@ export function ReportsTab({
   const requestTracker = useRequestTracker();
   const [reports, setReports] = useState<AdminReportSummary[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [statusFilter, setStatusFilter] = useState('pending');
-  const [reasonFilter, setReasonFilter] = useState<
-    '' | 'illegal_content' | 'copyright_violation' | 'malware' | 'spam' | 'other'
-  >('');
-  const [urgencyFilter, setUrgencyFilter] = useState<'' | 'high' | 'medium' | 'low'>('');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
+
+  const page = searchState?.reportsPage ?? 1;
+  const statusFilter = searchState?.reportsStatus ?? 'pending';
+  const reasonFilter = searchState?.reportsReason ?? '';
+  const urgencyFilter = searchState?.reportsUrgency ?? '';
 
   const loadReports = useCallback(async () => {
     setIsLoading(true);
@@ -144,53 +148,50 @@ export function ReportsTab({
         </span>
       </div>
 
-      <div className="admin-nav">
+      <fieldset className="admin-nav">
+        <legend className="sr-only">Filter reports by status</legend>
         {REPORT_STATUS_FILTERS.map((f) => (
           <button
             key={f.value}
             type="button"
+            aria-pressed={statusFilter === f.value}
             className={`admin-nav__tab ${statusFilter === f.value ? 'admin-nav__tab--active' : ''}`}
-            onClick={() => {
-              setPage(1);
-              setStatusFilter(f.value);
-            }}
+            onClick={() => onUpdateSearch?.({ reportsStatus: f.value, reportsPage: 1 })}
           >
             {f.label}
           </button>
         ))}
-      </div>
+      </fieldset>
 
-      <nav className="admin-nav" aria-label="Filter reports by reason">
+      <fieldset className="admin-nav">
+        <legend className="sr-only">Filter reports by reason</legend>
         {REPORT_REASON_FILTERS.map((option) => (
           <button
             key={option.label}
             type="button"
+            aria-pressed={reasonFilter === option.value}
             className={`admin-nav__tab admin-nav__tab--sm ${reasonFilter === option.value ? 'admin-nav__tab--active' : ''}`}
-            onClick={() => {
-              setPage(1);
-              setReasonFilter(option.value);
-            }}
+            onClick={() => onUpdateSearch?.({ reportsReason: option.value, reportsPage: 1 })}
           >
             {option.label}
           </button>
         ))}
-      </nav>
+      </fieldset>
 
-      <nav className="admin-nav" aria-label="Filter reports by urgency">
+      <fieldset className="admin-nav">
+        <legend className="sr-only">Filter reports by urgency</legend>
         {REPORT_URGENCY_FILTERS.map((option) => (
           <button
             key={option.label}
             type="button"
+            aria-pressed={urgencyFilter === option.value}
             className={`admin-nav__tab admin-nav__tab--sm ${urgencyFilter === option.value ? 'admin-nav__tab--active' : ''}`}
-            onClick={() => {
-              setPage(1);
-              setUrgencyFilter(option.value);
-            }}
+            onClick={() => onUpdateSearch?.({ reportsUrgency: option.value, reportsPage: 1 })}
           >
             {option.label}
           </button>
         ))}
-      </nav>
+      </fieldset>
 
       {error ? <p className="upload-error">{error}</p> : null}
 
@@ -275,7 +276,7 @@ export function ReportsTab({
             type="button"
             className="button-link button-link--ghost button-link--sm"
             disabled={page <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            onClick={() => onUpdateSearch?.({ reportsPage: Math.max(1, page - 1) })}
           >
             ← Previous
           </button>
@@ -286,7 +287,7 @@ export function ReportsTab({
             type="button"
             className="button-link button-link--ghost button-link--sm"
             disabled={page >= totalPages}
-            onClick={() => setPage((p) => p + 1)}
+            onClick={() => onUpdateSearch?.({ reportsPage: page + 1 })}
           >
             Next →
           </button>

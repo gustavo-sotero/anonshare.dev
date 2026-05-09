@@ -120,7 +120,7 @@ export async function submitShareReport(
   signal?: AbortSignal
 ): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
   const body: Record<string, string> = { reason };
-  if (message) body['message'] = message;
+  if (message) body.message = message;
 
   const res = await fetch(`/api/report/${token}`, {
     method: 'POST',

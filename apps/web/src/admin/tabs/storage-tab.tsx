@@ -4,6 +4,7 @@ import { AdminAccessError } from '~/admin/access';
 import { buildStorageHighlights } from '~/admin/dashboard';
 import { formatBytes, formatCount, formatDateTime, formatFileStatus } from '~/admin/formatters';
 import { runTrackedRequest, useRequestTracker } from '~/admin/request-tracker';
+import type { AdminSearchParams, AdminSearchUpdate } from '~/admin/search-params';
 import {
   type DashboardData,
   FILE_PAGE_SIZE,
@@ -13,19 +14,24 @@ import {
 
 export function StorageTab({
   data,
+  searchState,
+  onUpdateSearch,
   onInspect,
   onAccessLost
 }: {
   data: DashboardData;
+  searchState?: AdminSearchParams | undefined;
+  onUpdateSearch?: ((updates: AdminSearchUpdate) => void) | undefined;
   onInspect: (fileId: string) => void;
   onAccessLost: OnAdminAccessLost;
 }) {
   const requestTracker = useRequestTracker();
   const [files, setFiles] = useState<AdminFileSummary[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const page = searchState?.storagePage ?? 1;
 
   useEffect(() => {
     setIsLoading(true);
@@ -143,7 +149,7 @@ export function StorageTab({
             type="button"
             className="button-link button-link--ghost button-link--sm"
             disabled={page <= 1}
-            onClick={() => setPage((currentPage) => Math.max(1, currentPage - 1))}
+            onClick={() => onUpdateSearch?.({ storagePage: Math.max(1, page - 1) })}
           >
             ← Previous
           </button>
@@ -154,7 +160,7 @@ export function StorageTab({
             type="button"
             className="button-link button-link--ghost button-link--sm"
             disabled={page >= totalPages}
-            onClick={() => setPage((currentPage) => currentPage + 1)}
+            onClick={() => onUpdateSearch?.({ storagePage: page + 1 })}
           >
             Next →
           </button>
