@@ -2,7 +2,7 @@ import type { createDb } from '@anonshare/infrastructure/db';
 import type { Redis } from '@anonshare/infrastructure/redis';
 import type { storageAdapter } from '@anonshare/infrastructure/storage';
 
-export type UploadStorage = Pick<typeof storageAdapter, 'put' | 'head' | 'delete'>;
+export type UploadStorage = Pick<typeof storageAdapter, 'putConfirmed' | 'delete'>;
 
 export type UploadRouterDeps = {
   /** Override the default lazy DB singleton. Useful in tests. */

@@ -1,4 +1,5 @@
 import { shareTokenParamsSchema } from '@anonshare/contracts';
+import { auth as authConfig } from '@anonshare/infrastructure/config';
 import { createDb } from '@anonshare/infrastructure/db';
 import type { Context } from 'hono';
 
@@ -47,8 +48,17 @@ export async function hashIp(raw?: string, secret?: string): Promise<string | nu
   if (!firstIp) return null;
   const ip = firstIp.trim();
 
-  if (secret) {
-    const keyData = new TextEncoder().encode(secret);
+  let resolvedSecret = secret;
+  if (!resolvedSecret) {
+    try {
+      resolvedSecret = authConfig.sessionSecret();
+    } catch {
+      resolvedSecret = undefined;
+    }
+  }
+
+  if (resolvedSecret) {
+    const keyData = new TextEncoder().encode(resolvedSecret);
     const messageData = new TextEncoder().encode(`ip-privacy:${ip}`);
     const key = await crypto.subtle.importKey(
       'raw',

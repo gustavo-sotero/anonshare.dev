@@ -82,6 +82,7 @@ export interface StorageAdapter {
   listObjects(options?: StorageListOptions): Promise<StorageListResult>;
   put(obj: StorageObject): Promise<void>;
   putObject(obj: StorageObject): Promise<void>;
+  putConfirmed(obj: StorageObject): Promise<void>;
   get(key: string): Promise<ReadableStream | null>;
   getObject(key: string): Promise<ReadableStream | null>;
   exists(key: string): Promise<boolean>;
@@ -324,6 +325,11 @@ export function createStorageAdapter(options: CreateStorageAdapterOptions = {}):
     await withRetries(writeOperation, retryPolicy);
   }
 
+  async function putConfirmed(obj: StorageObject): Promise<void> {
+    await put(obj);
+    await confirmStoredObject({ head }, obj.key, obj.contentLength);
+  }
+
   async function get(key: string): Promise<ReadableStream | null> {
     try {
       return await withRetries(async () => {
@@ -435,6 +441,7 @@ export function createStorageAdapter(options: CreateStorageAdapterOptions = {}):
     listObjects: list,
     put,
     putObject: put,
+    putConfirmed,
     get,
     getObject: get,
     exists,
@@ -462,13 +469,13 @@ const STORAGE_CONFIRMATION_RETRY_DELAY_MS = 250;
  * Retries up to STORAGE_CONFIRMATION_ATTEMPTS times with a short back-off to
  * tolerate eventual-consistency propagation from some S3-compatible providers.
  *
- * Throws if the object remains absent or the size does not match after all
- * attempts.
+ * Throws if the object remains absent or, when `expectedSizeBytes` is provided,
+ * the size does not match after all attempts.
  */
 export async function confirmStoredObject(
   storage: Pick<StorageAdapter, 'head'>,
   key: string,
-  expectedSizeBytes: number
+  expectedSizeBytes?: number
 ): Promise<void> {
   let lastError: Error | null = null;
 
@@ -480,7 +487,7 @@ export async function confirmStoredObject(
         throw new Error('Storage confirmation returned no object metadata');
       }
 
-      if (storedObject.contentLength !== expectedSizeBytes) {
+      if (expectedSizeBytes !== undefined && storedObject.contentLength !== expectedSizeBytes) {
         throw new Error(
           `Storage confirmation size mismatch: expected ${expectedSizeBytes}, got ${storedObject.contentLength}`
         );

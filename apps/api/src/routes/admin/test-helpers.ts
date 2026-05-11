@@ -63,7 +63,14 @@ export async function makeSignedCookieValue(sessionId: string): Promise<string> 
 
 export function buildApp(deps: AdminRouterDeps): Hono {
   const app = new Hono();
-  app.route('/admin', createAdminRouter({ getSessionSecret: () => TEST_SESSION_SECRET, ...deps }));
+  app.route(
+    '/admin',
+    createAdminRouter({
+      getSessionSecret: () => TEST_SESSION_SECRET,
+      listRateLimitBlockedCountsByDay: deps.listRateLimitBlockedCountsByDay ?? (async () => []),
+      ...deps
+    })
+  );
   return app;
 }
 

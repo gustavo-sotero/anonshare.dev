@@ -4,7 +4,7 @@ import { app as appConfig, loadSystemSettingOrDefault } from '@anonshare/infrast
 import { files } from '@anonshare/infrastructure/db/schema';
 import { applyRateLimit, recordRateLimitBlocked } from '@anonshare/infrastructure/rate-limit';
 import { getRedisClient } from '@anonshare/infrastructure/redis';
-import { confirmStoredObject, storageAdapter } from '@anonshare/infrastructure/storage';
+import { storageAdapter } from '@anonshare/infrastructure/storage';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { logger } from '../../logger';
@@ -282,17 +282,16 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
     });
 
     try {
-      await resolveStorage.put({
+      await resolveStorage.putConfirmed({
         key: objectKey,
         body: fileField.stream(),
         contentType: metadata.mimeType,
         contentLength: metadata.sizeBytes
       });
     } catch (err) {
-      // Compensate: remove the pending DB record so that no stale metadata
-      // is left pointing to a non-existent object. If the DELETE also fails,
-      // the reconciler will detect the pending_upload record with no storage
-      // object and clean it up.
+      // The storage layer now owns both the write and the post-write
+      // confirmation semantics. If either step fails, compensate by deleting
+      // the pending DB record so no stale metadata points at a missing object.
       logger.error('Storage upload failed — triggering compensation', {
         event: 'upload_storage_failed',
         requestId,
@@ -330,27 +329,6 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
 
       return c.json(
         errorBody(API_ERROR_CODES.INTERNAL_ERROR, 'Upload failed: storage unavailable'),
-        500
-      );
-    }
-
-    try {
-      await confirmStoredObject(resolveStorage, objectKey, metadata.sizeBytes);
-    } catch (err) {
-      logger.error('Storage upload could not be confirmed — record left pending for reconciler', {
-        event: 'upload_storage_failed',
-        requestId,
-        actor: 'anonymous',
-        entity: { type: 'file', id: token },
-        outcome: 'failure',
-        objectKey,
-        error: err instanceof Error ? err.message : String(err),
-        reason: 'storage_confirmation_failed',
-        ...storageErrorContext(err)
-      });
-
-      return c.json(
-        errorBody(API_ERROR_CODES.INTERNAL_ERROR, 'Upload failed: storage confirmation error'),
         500
       );
     }

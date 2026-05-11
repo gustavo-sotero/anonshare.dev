@@ -54,6 +54,54 @@ function makeFile(overrides: FakeStorageFile = {}) {
 }
 
 describe('createStorageAdapter', () => {
+  test('confirms object visibility after a successful write', async () => {
+    let writeCalls = 0;
+    let statCalls = 0;
+
+    const adapter = createStorageAdapter({
+      getFile: () =>
+        makeFile({
+          statImpl: async () => {
+            statCalls += 1;
+            return { size: 3, type: 'application/octet-stream' };
+          },
+          writeImpl: async () => {
+            writeCalls += 1;
+          }
+        })
+    });
+
+    await expect(
+      adapter.putConfirmed({
+        key: 'objects/example',
+        body: new Uint8Array([1, 2, 3]),
+        contentType: 'application/octet-stream',
+        contentLength: 3
+      })
+    ).resolves.toBeUndefined();
+
+    expect(writeCalls).toBe(1);
+    expect(statCalls).toBe(1);
+  });
+
+  test('fails confirmed writes when storage metadata never matches the uploaded size', async () => {
+    const adapter = createStorageAdapter({
+      getFile: () =>
+        makeFile({
+          statImpl: async () => ({ size: 1, type: 'application/octet-stream' })
+        })
+    });
+
+    await expect(
+      adapter.putConfirmed({
+        key: 'objects/example',
+        body: new Uint8Array([1, 2, 3]),
+        contentType: 'application/octet-stream',
+        contentLength: 3
+      })
+    ).rejects.toThrow('Storage confirmation size mismatch');
+  });
+
   test('exposes spec-aligned method aliases for object operations', async () => {
     let lastPresignMethod: string | undefined;
     let writeCalls = 0;

@@ -43,6 +43,10 @@ packages/
 - [Bun](https://bun.sh) ≥ 1.1
 - [Docker](https://docs.docker.com/get-docker/) + Docker Compose v2
 
+Commit `bun.lock`. CI installs dependencies with a frozen lockfile, and `bun run verify:repo`
+enforces that the lockfile remains present in the repository and that the CI workflow keeps
+using a frozen Bun install contract.
+
 ---
 
 ## Local development
@@ -100,6 +104,7 @@ Copy-Item .env.example .env
 ```
 
 Fill in `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_ALLOWED_USER_ID` and `SESSION_SECRET` in the root `.env`.
+`SESSION_SECRET` signs admin session cookies and keys anonymous IP pseudonyms on abuse-control paths, so treat it as a real production secret and rotate it deliberately.
 
 All local processes (`web`, `api`, `worker`) load variables from this same root `.env`.
 In CI and production, inject the same variable names through the platform environment or secret manager instead of maintaining separate per-process env contracts.
@@ -145,6 +150,7 @@ bun run --cwd apps/web dev
 | Command | What it does |
 |---|---|
 | `bun run dev` | Run all app dev servers in parallel from the workspace root |
+| `bun run verify:repo` | Verify that `bun.lock` is committed and CI still uses a frozen Bun install |
 | `bun run verify` | Dependency check + typecheck + lint + tests + build + migration validation |
 | `bun run build` | Bundle the web, API, and worker entrypoints |
 | `bun run test` | Run foundational tests |
@@ -189,6 +195,9 @@ This destroys named Docker volumes. All uploaded files and schema data are lost.
 - **Database tooling**: root Drizzle commands derive local connection settings from the root `.env` so operational scripts and Docker Compose stay aligned.
 - **Logging**: use `logger` from `@anonshare/infrastructure/logger`. Always include an `event` field (snake_case), plus `actor`, `entity`, and `outcome` when they are known.
 - **Dependencies**: never manually edit version strings in `package.json`. Use `bun add` / `bun remove`.
+- **Lockfile**: keep `bun.lock` committed. Local installs, CI, and handoff validation all assume the repository carries the canonical Bun lockfile.
+- **Admin auth**: admin sessions are DB-backed and carried in signed cookies. Rotating `SESSION_SECRET` invalidates all active admin sessions immediately.
+- **Anonymous IP handling**: public abuse-control paths never persist raw IPs; they store a keyed HMAC-based pseudonym derived from `SESSION_SECRET`.
 - **Storage integration**: use Bun's native S3 API through `@anonshare/infrastructure/storage`; do not reintroduce the AWS SDK client layer.
 
 ## Foundation docs

@@ -15,6 +15,14 @@ function resetEnv(): void {
   }
 }
 
+function clearStorageEnv(): void {
+  delete process.env.STORAGE_ENDPOINT;
+  delete process.env.STORAGE_ACCESS_KEY_ID;
+  delete process.env.STORAGE_SECRET_ACCESS_KEY;
+  delete process.env.STORAGE_BUCKET;
+  delete process.env.STORAGE_REGION;
+}
+
 beforeEach(() => {
   resetEnv();
 });
@@ -88,6 +96,7 @@ describe('environment validation', () => {
     process.env.STORAGE_ACCESS_KEY_ID = 'minioadmin';
     process.env.STORAGE_SECRET_ACCESS_KEY = 'minioadmin';
     process.env.STORAGE_BUCKET = 'anonshare';
+    process.env.STORAGE_REGION = 'us-east-1';
     process.env.GITHUB_CLIENT_ID = 'github-client-id';
     process.env.GITHUB_CLIENT_SECRET = 'github-client-secret';
     process.env.GITHUB_ALLOWED_USER_ID = '123456';
@@ -185,6 +194,7 @@ describe('environment validation', () => {
     process.env.APP_BASE_URL = 'https://anonshare.dev';
     process.env.DATABASE_URL = 'postgresql://anonshare:anonshare@localhost:5432/anonshare';
     process.env.REDIS_URL = 'redis://localhost:6379';
+    clearStorageEnv();
 
     expect(() => validateWorkerEnv()).toThrow(/STORAGE_/);
   });

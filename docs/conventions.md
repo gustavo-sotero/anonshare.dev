@@ -17,6 +17,7 @@ This document consolidates the working conventions established in Module 1 so la
 - Shared code belongs in `packages/*` and is consumed through workspace aliases.
 - Do not import package source files by deep relative path such as `../../packages/...`.
 - Use `~/*` only for local app-internal imports.
+- Keep `bun.lock` committed. Reproducible installs are part of the repository contract, not an optional local convenience.
 
 ## Environment Policy
 
@@ -38,6 +39,7 @@ This document consolidates the working conventions established in Module 1 so la
 
 ## Operational Commands
 
+- `bun run verify:repo` checks that `bun.lock` is committed and that CI still uses a frozen Bun install.
 - `bun run infra:up` starts PostgreSQL, Redis, and MinIO.
 - `bun run infra:check` validates application-facing connectivity, not just container health.
 - `bun run verify:bullmq` enforces BullMQ version parity across every workspace package that depends on it.

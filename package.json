@@ -24,10 +24,11 @@
     "infra:down": "docker compose down",
     "infra:check": "bun --env-file=.env packages/infrastructure/src/scripts/check-local-platform.ts",
     "infra:reset": "docker compose down -v && docker compose up -d",
+    "verify:repo": "bun packages/infrastructure/src/scripts/verify-repo-integrity.ts",
     "verify:deps": "bun run infra:check",
     "verify:bullmq": "bun packages/infrastructure/src/scripts/check-bullmq-version.ts",
     "verify:migrations": "bun run db:generate && git diff --exit-code -- packages/infrastructure/src/db/migrations && bun run db:migrate",
-    "verify": "bun run verify:deps && bun run verify:bullmq && bun run typecheck && bun run lint && bun run test && bun run build && bun run verify:migrations"
+    "verify": "bun run verify:repo && bun run verify:deps && bun run verify:bullmq && bun run typecheck && bun run lint && bun run test && bun run build && bun run verify:migrations"
   },
   "overrides": {
     "chokidar": "^4.0.3",

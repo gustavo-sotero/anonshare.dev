@@ -166,10 +166,22 @@ function PreviewPanel({ url, mimeType }: { url: string; mimeType: string }) {
 
 async function readTextPreview(
   url: string,
-  maxBytes: number
+  maxBytes: number,
+  signal?: AbortSignal
 ): Promise<{ text: string; truncated: boolean }> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), TEXT_PREVIEW_TIMEOUT_MS);
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, TEXT_PREVIEW_TIMEOUT_MS);
+  const forwardAbort = () => controller.abort();
+
+  if (signal?.aborted) {
+    controller.abort();
+  }
+
+  signal?.addEventListener('abort', forwardAbort, { once: true });
 
   try {
     const response = await fetch(url, { signal: controller.signal });
@@ -237,12 +249,17 @@ async function readTextPreview(
     };
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
+      if (!timedOut) {
+        throw err;
+      }
+
       throw new Error('Preview request timed out');
     }
 
     throw err;
   } finally {
     clearTimeout(timeoutId);
+    signal?.removeEventListener('abort', forwardAbort);
   }
 }
 
@@ -253,12 +270,13 @@ function TextPreview({ url }: { url: string }) {
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
 
     setText(null);
     setIsTruncated(false);
     setError(false);
 
-    readTextPreview(url, TEXT_PREVIEW_MAX_BYTES)
+    readTextPreview(url, TEXT_PREVIEW_MAX_BYTES, controller.signal)
       .then((result) => {
         if (cancelled) {
           return;
@@ -275,6 +293,7 @@ function TextPreview({ url }: { url: string }) {
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [url]);
 
@@ -480,6 +499,14 @@ function SharePageContent() {
     setReportOpen(false);
     setReportPhase('idle');
     setReportError(null);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      downloadAbortRef.current?.abort();
+      previewAbortRef.current?.abort();
+      reportAbortRef.current?.abort();
+    };
   }, []);
 
   const refreshAvailability = useCallback(

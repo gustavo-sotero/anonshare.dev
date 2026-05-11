@@ -118,6 +118,17 @@ describe('hashIp', () => {
     const without = await hashIp('10.0.0.1');
     expect(withSpace).toBe(without);
   });
+
+  test('supports keyed HMAC hashing for privacy-scoped pseudonyms', async () => {
+    const keyed = await hashIp('10.0.0.1', 'session-secret-that-is-long-enough');
+    const keyedAgain = await hashIp('10.0.0.1', 'session-secret-that-is-long-enough');
+    const differentSecret = await hashIp('10.0.0.1', 'another-secret-that-is-long-enough');
+
+    expect(keyed).toBeTruthy();
+    expect(keyed?.length).toBe(32);
+    expect(keyedAgain).toBe(keyed);
+    expect(differentSecret).not.toBe(keyed);
+  });
 });
 
 // ── parseShareToken ───────────────────────────────────────────────────────────

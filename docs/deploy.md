@@ -28,7 +28,7 @@ Supported S3-compatible providers: AWS S3, Cloudflare R2, MinIO (self-hosted). T
 
 ### Trusted Reverse Proxy
 
-The API reads `X-Forwarded-For` for IP-based rate limiting and download event logging. In production, place all processes behind a reverse proxy (e.g. nginx, Caddy, Cloudflare) that sets this header reliably. The API hashes the first IP from the header — it never stores raw addresses.
+The API reads `X-Forwarded-For` for IP-based rate limiting and download event logging. In production, place all processes behind a reverse proxy (e.g. nginx, Caddy, Cloudflare) that sets this header reliably. The API HMAC-hashes the first IP from the header using `SESSION_SECRET` with a privacy-specific purpose prefix — it never stores raw addresses.
 
 ### HTTPS
 
@@ -38,6 +38,14 @@ All `APP_BASE_URL` and `APP_API_URL` values must use `https://` in any environme
 
 `apps/api` (job producer), `apps/worker` (job consumer), and `packages/infrastructure` (shared queue factory) all import BullMQ. They must stay on the same dependency line to avoid serialisation or protocol mismatches between shared queue code and the app processes that instantiate it.
 Run `bun run verify:bullmq` from the workspace root before deployment or after dependency changes to enforce that parity automatically.
+
+### Dependency Reproducibility
+
+- `bun.lock` is a committed repository artifact, not a local-only cache file.
+- CI installs dependencies with `bun install --frozen-lockfile`.
+- `bun run verify:repo` mirrors that contract locally by failing when `bun.lock` is missing or when the CI workflow stops using a frozen Bun install.
+
+Treat lockfile drift as a release blocker: deployment, CI, and local verification must all describe the same dependency graph.
 
 ### Redis Ownership and Queue Connections
 
@@ -82,8 +90,16 @@ Do not maintain a separate, divergent env model for each process. The variable n
 ### Critical Security Values
 
 - `SESSION_SECRET`: Generate with `openssl rand -hex 64`. Must be at least 32 characters. Rotate invalidates all admin sessions.
+- `SESSION_SECRET` also keys anonymous IP pseudonyms used by rate limiting and download/report telemetry. Do not reuse it outside this application boundary.
 - `GITHUB_ALLOWED_USER_ID`: Must be the numeric GitHub user ID (not the login name). Find yours at `https://api.github.com/users/<yourlogin>` under `id`. This is the sole admin access control.
 - `STORAGE_SECRET_ACCESS_KEY`: Store in environment only, never commit to version control.
+
+### Admin Session Cookies
+
+- Admin authentication remains DB-backed; the cookie stores only the opaque session ID.
+- The cookie is signed with Hono's signed-cookie helpers and `SESSION_SECRET`.
+- Any tampering causes the cookie to be rejected before the session lookup runs.
+- Rotating `SESSION_SECRET` invalidates every active admin session because existing cookie signatures stop verifying.
 
 ## Pre-Deployment Checklist
 
@@ -94,6 +110,8 @@ Do not maintain a separate, divergent env model for each process. The variable n
 - [ ] S3-compatible bucket created and accessible with the configured storage credentials
 - [ ] The platform injects the canonical environment variables listed above into each process
 - [ ] `GITHUB_ALLOWED_USER_ID` verified against `https://api.github.com/users/<yourlogin>`
+- [ ] `bun.lock` is committed and matches the dependency graph being deployed
+- [ ] `bun run verify:repo` passes from the workspace root
 - [ ] `bun run verify:bullmq` passes from the workspace root so every BullMQ-consuming workspace package stays aligned
 
 ### Database
@@ -110,6 +128,9 @@ bun run db:seed
 ### Build
 
 ```bash
+# Verify repository integrity before shipping
+bun run verify:repo
+
 # Verify the local quality gate and BullMQ parity before shipping
 bun run verify
 
@@ -216,6 +237,16 @@ Upload requests will fail with 503 (validated pre-condition). Active download li
 ### Reconciler detects orphan
 
 The reconciler logs `reconciliation.anomaly_detected` events with `type` and `fileId`. These surface in the admin dashboard under **Anomalies**. Follow the anomaly record to investigate. Confirmed orphaned objects can be deleted manually from the storage provider console; confirmed orphaned DB records can be marked `deleted` via the admin moderation endpoint.
+
+### One-shot null-expiration repair
+
+Legacy active/expiring rows with a null expiration timestamp are no longer repaired in the steady-state reconcile loop. Use the one-shot operational script instead:
+
+```bash
+bun --env-file=.env packages/infrastructure/src/scripts/repair-null-expiration.ts
+```
+
+Run it deliberately during maintenance windows or after importing legacy data. The worker reconcile loop now assumes that any such legacy backfill is handled out-of-band.
 
 ## Dependency Upgrade Policy
 
