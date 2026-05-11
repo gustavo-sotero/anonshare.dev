@@ -24,7 +24,7 @@ describe('GET /admin/reports', () => {
 
   test('returns paginated list of reports', async () => {
     const report = makeAdminReport();
-    const db = makeAdminDb({ selectResults: [[report], [{ total: 1 }]] });
+    const db = makeAdminDb({ selectResults: [[report]] });
     const app = buildApp(makeAuthDeps(db));
 
     const response = await request(app, '/admin/reports', { 'x-admin-session-id': 'session-1' });
@@ -33,12 +33,12 @@ describe('GET /admin/reports', () => {
     expect(response.status).toBe(200);
     expect(body.reports).toHaveLength(1);
     expect(body.reports[0].id).toBe(report.id);
-    expect(body.total).toBe(1);
-    expect(body.page).toBe(1);
+    expect(body.hasMore).toBe(false);
+    expect(body.nextCursor).toBeNull();
   });
 
   test('accepts status and fileId query filters', async () => {
-    const db = makeAdminDb({ selectResults: [[], [{ total: 0 }]] });
+    const db = makeAdminDb({ selectResults: [[]] });
     const app = buildApp(makeAuthDeps(db));
 
     const response = await request(
@@ -52,7 +52,7 @@ describe('GET /admin/reports', () => {
   });
 
   test('accepts reason and urgency query filters', async () => {
-    const db = makeAdminDb({ selectResults: [[], [{ total: 0 }]] });
+    const db = makeAdminDb({ selectResults: [[]] });
     const app = buildApp(makeAuthDeps(db));
 
     const response = await request(app, '/admin/reports?reason=malware&urgency=high', {
@@ -69,6 +69,35 @@ describe('GET /admin/reports', () => {
       'x-admin-session-id': 'session-1'
     });
     expect(response.status).toBe(400);
+  });
+
+  test('accepts a valid cursor and returns the first page', async () => {
+    const cursor = Buffer.from(
+      JSON.stringify({ s: '2026-02-01T08:00:00.000Z', i: '00000000-0000-4000-8000-000000000001' }),
+      'utf-8'
+    ).toString('base64url');
+
+    const db = makeAdminDb({ selectResults: [[]] });
+    const app = buildApp(makeAuthDeps(db));
+
+    const response = await request(app, `/admin/reports?cursor=${encodeURIComponent(cursor)}`, {
+      'x-admin-session-id': 'session-1'
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ reports: [], hasMore: false, nextCursor: null });
+  });
+
+  test('falls back to first page when cursor is malformed', async () => {
+    const db = makeAdminDb({ selectResults: [[]] });
+    const app = buildApp(makeAuthDeps(db));
+
+    const response = await request(app, '/admin/reports?cursor=!!!not-base64url!!!', {
+      'x-admin-session-id': 'session-1'
+    });
+
+    expect(response.status).toBe(200);
   });
 });
 

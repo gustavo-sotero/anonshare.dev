@@ -190,3 +190,115 @@ jobs:
           assert_header http://localhost:3002/health cache-control no-store
           assert_header http://localhost:3002/health x-content-type-options nosniff
 
+  browser-tests:
+    name: Browser Tests (E2E)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: quality
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: anonshare
+          POSTGRES_PASSWORD: anonshare_dev
+          POSTGRES_DB: anonshare_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U anonshare"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+      minio:
+        image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+        ports:
+          - 9000:9000
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+        options: >-
+          --health-cmd "curl -f http://localhost:9000/minio/health/live || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Setup Playwright browsers
+        run: bunx playwright install chromium --with-deps
+
+      - name: Create MinIO bucket
+        run: |
+          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+          chmod +x /usr/local/bin/mc
+          mc alias set local http://localhost:9000 minioadmin minioadmin
+          mc mb local/anonshare-dev --ignore-existing
+
+      - name: Run database migrations
+        run: bun run db:migrate
+
+      - name: Start application stack
+        shell: bash
+        run: |
+          bun run --filter '@anonshare/api' start > api.log 2>&1 &
+          echo $! > api.pid
+          bun run --filter '@anonshare/web' start > web.log 2>&1 &
+          echo $! > web.pid
+          bun run --filter '@anonshare/worker' start > worker.log 2>&1 &
+          echo $! > worker.pid
+
+          for _ in {1..30}; do
+            if curl -fsS http://localhost:3001/health >/dev/null && \
+               curl -fsS http://localhost:3000/health >/dev/null; then
+              echo "Stack is ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Stack failed to start" >&2
+          cat api.log || true
+          cat web.log || true
+          exit 1
+
+      - name: Run Playwright E2E tests
+        run: bun run e2e
+        env:
+          NODE_ENV: test
+          APP_BASE_URL: http://localhost:3000
+          APP_API_URL: http://localhost:3001
+
+      - name: Stop application stack
+        if: always()
+        run: |
+          kill "$(cat api.pid)" "$(cat web.pid)" "$(cat worker.pid)" 2>/dev/null || true
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+

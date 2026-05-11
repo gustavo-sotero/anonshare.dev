@@ -1,11 +1,12 @@
-import { type FileMetaResponse, reportReasonValues } from '@anonshare/contracts';
+import type { FileMetaResponse } from '@anonshare/contracts';
 import { isPreviewSupported } from '@anonshare/domain';
 import { createFileRoute, Link } from '@tanstack/react-router';
-import type { ReactNode } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { SiteFrame } from '~/components/site-frame';
 import { formatDateDeterministic } from '~/share/date-format';
 import { createInitialSharePageUiState, type ReportReason } from '~/share/page-state';
+import { PreviewPanel } from '~/share/preview';
+import { PublicReportPanel, type ReportPhase } from '~/share/report-panel';
 import { canReportUnavailableFile } from '~/share/reporting';
 import {
   fetchDownloadUrl,
@@ -14,11 +15,8 @@ import {
   refreshShareAvailability,
   submitShareReport
 } from '~/share/transport';
-import {
-  getUnavailabilityIcon,
-  getUnavailabilityInfo,
-  type UnavailabilityInfo
-} from '~/share/unavailable-states';
+import { UnavailableFilePageFromCode } from '~/share/unavailable-page';
+import { formatBytes } from '~/utils/format';
 
 // ─── Loader result type (shared between head, loader, and component) ──────────
 
@@ -81,13 +79,6 @@ export const Route = createFileRoute('/share/$token')({
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
 function mimeLabel(mimeType: string): string {
   const parts = mimeType.split('/');
   const type = parts[0] ?? mimeType;
@@ -97,8 +88,6 @@ function mimeLabel(mimeType: string): string {
   return clean.slice(0, 20);
 }
 
-const TEXT_PREVIEW_MAX_BYTES = 64 * 1024;
-
 const RUNTIME_UNAVAILABLE_CODES = new Set([
   'file_expired',
   'file_consumed',
@@ -107,345 +96,6 @@ const RUNTIME_UNAVAILABLE_CODES = new Set([
   'file_unavailable',
   'not_found'
 ]);
-
-const REPORT_REASON_LABELS: Record<ReportReason, string> = {
-  illegal_content: 'Illegal content',
-  copyright_violation: 'Copyright violation',
-  malware: 'Malware or phishing',
-  spam: 'Spam',
-  other: 'Other'
-};
-
-const TEXT_PREVIEW_TIMEOUT_MS = 15_000;
-
-// ─── Preview renderer ─────────────────────────────────────────────────────────
-
-function PreviewPanel({ url, mimeType }: { url: string; mimeType: string }) {
-  const base = (mimeType.split(';')[0] ?? mimeType).trim();
-
-  if (base.startsWith('image/')) {
-    return (
-      <div className="preview-panel">
-        <img src={url} alt="File preview" className="preview-panel__image" />
-      </div>
-    );
-  }
-
-  if (base.startsWith('video/')) {
-    return (
-      <div className="preview-panel">
-        {/* biome-ignore lint/a11y/useMediaCaption: preview of uploaded content, no captions available */}
-        <video src={url} controls playsInline className="preview-panel__video" />
-      </div>
-    );
-  }
-
-  if (base.startsWith('audio/')) {
-    return (
-      <div className="preview-panel">
-        {/* biome-ignore lint/a11y/useMediaCaption: preview of uploaded content */}
-        <audio src={url} controls className="preview-panel__audio" />
-      </div>
-    );
-  }
-
-  if (base === 'application/pdf') {
-    return (
-      <div className="preview-panel preview-panel--embed">
-        <iframe src={url} title="PDF preview" className="preview-panel__iframe" />
-      </div>
-    );
-  }
-
-  if (base.startsWith('text/')) {
-    return <TextPreview url={url} />;
-  }
-
-  return null;
-}
-
-async function readTextPreview(
-  url: string,
-  maxBytes: number,
-  signal?: AbortSignal
-): Promise<{ text: string; truncated: boolean }> {
-  const controller = new AbortController();
-  let timedOut = false;
-  const timeoutId = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, TEXT_PREVIEW_TIMEOUT_MS);
-  const forwardAbort = () => controller.abort();
-
-  if (signal?.aborted) {
-    controller.abort();
-  }
-
-  signal?.addEventListener('abort', forwardAbort, { once: true });
-
-  try {
-    const response = await fetch(url, { signal: controller.signal });
-
-    if (!response.ok) {
-      throw new Error('Preview request failed');
-    }
-
-    if (!response.body) {
-      const text = await response.text();
-      return {
-        text: text.slice(0, maxBytes),
-        truncated: text.length > maxBytes
-      };
-    }
-
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let received = 0;
-    let streamDone = false;
-    let truncated = false;
-
-    while (received < maxBytes) {
-      const { done, value } = await reader.read();
-      streamDone = done;
-
-      if (done) {
-        break;
-      }
-
-      if (!value || value.byteLength === 0) {
-        continue;
-      }
-
-      const remaining = maxBytes - received;
-      if (value.byteLength <= remaining) {
-        chunks.push(value);
-        received += value.byteLength;
-        continue;
-      }
-
-      chunks.push(value.subarray(0, remaining));
-      received += remaining;
-      truncated = true;
-      break;
-    }
-
-    if (!truncated && !streamDone) {
-      const probe = await reader.read();
-      truncated = !probe.done;
-    }
-
-    await reader.cancel().catch(() => {});
-
-    const bytes = new Uint8Array(received);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-
-    return {
-      text: new TextDecoder().decode(bytes),
-      truncated
-    };
-  } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      if (!timedOut) {
-        throw err;
-      }
-
-      throw new Error('Preview request timed out');
-    }
-
-    throw err;
-  } finally {
-    clearTimeout(timeoutId);
-    signal?.removeEventListener('abort', forwardAbort);
-  }
-}
-
-function TextPreview({ url }: { url: string }) {
-  const [text, setText] = useState<string | null>(null);
-  const [isTruncated, setIsTruncated] = useState(false);
-  const [error, setError] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
-
-    setText(null);
-    setIsTruncated(false);
-    setError(false);
-
-    readTextPreview(url, TEXT_PREVIEW_MAX_BYTES, controller.signal)
-      .then((result) => {
-        if (cancelled) {
-          return;
-        }
-
-        setIsTruncated(result.truncated);
-        setText(result.text);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setError(true);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [url]);
-
-  if (error) return <p className="preview-panel__error">Could not load text preview.</p>;
-  if (text === null) return <p className="preview-panel__loading">Loading preview…</p>;
-
-  return (
-    <div className="preview-panel preview-panel--text">
-      <pre className="preview-panel__pre">{text}</pre>
-      {isTruncated && (
-        <p className="preview-panel__loading">Preview truncated to the first 64 KB.</p>
-      )}
-    </div>
-  );
-}
-
-type ReportPhase = 'idle' | 'submitting' | 'success' | 'error';
-
-function PublicReportPanel({
-  reportOpen,
-  reportReason,
-  reportMessage,
-  reportPhase,
-  reportError,
-  onOpen,
-  onReasonChange,
-  onMessageChange,
-  onSubmit,
-  onCancel,
-  copy
-}: {
-  reportOpen: boolean;
-  reportReason: ReportReason;
-  reportMessage: string;
-  reportPhase: ReportPhase;
-  reportError: string | null;
-  onOpen: () => void;
-  onReasonChange: (reason: ReportReason) => void;
-  onMessageChange: (message: string) => void;
-  onSubmit: () => void;
-  onCancel: () => void;
-  copy?: string;
-}) {
-  return (
-    <section className="panel panel--muted">
-      {reportPhase === 'success' ? (
-        <p className="panel__copy report-success">
-          &#x2713; Your report has been received. The operator reviews all reports.
-        </p>
-      ) : reportOpen ? (
-        <>
-          <div className="panel__row">
-            <p className="panel__label">Report this file</p>
-          </div>
-          <div className="report-form">
-            <label className="report-form__label">
-              Reason
-              <select
-                className="report-form__select"
-                value={reportReason}
-                onChange={(e) => {
-                  const nextReason = e.target.value;
-                  if (reportReasonValues.includes(nextReason as ReportReason)) {
-                    onReasonChange(nextReason as ReportReason);
-                  }
-                }}
-                disabled={reportPhase === 'submitting'}
-              >
-                {reportReasonValues.map((reason) => (
-                  <option key={reason} value={reason}>
-                    {REPORT_REASON_LABELS[reason]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="report-form__label">
-              Additional context <span className="report-form__optional">(optional)</span>
-              <textarea
-                className="report-form__textarea"
-                value={reportMessage}
-                onChange={(e) => onMessageChange(e.target.value.slice(0, 1000))}
-                placeholder="Describe the issue briefly."
-                rows={3}
-                disabled={reportPhase === 'submitting'}
-              />
-            </label>
-            {reportError && <p className="upload-error">{reportError}</p>}
-            <div className="action-row">
-              <button
-                type="button"
-                className="button-link button-link--sm"
-                disabled={reportPhase === 'submitting'}
-                onClick={onSubmit}
-              >
-                {reportPhase === 'submitting' ? 'Submitting…' : 'Submit report'}
-              </button>
-              <button
-                type="button"
-                className="button-link button-link--ghost button-link--sm"
-                disabled={reportPhase === 'submitting'}
-                onClick={onCancel}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </>
-      ) : (
-        <p className="panel__copy">
-          {copy ?? 'If this file contains illegal or harmful content, you can '}
-          <button type="button" className="inline-btn" onClick={onOpen}>
-            report it
-          </button>
-          . Reports are reviewed by the operator.
-        </p>
-      )}
-    </section>
-  );
-}
-
-// ─── Unavailable file page ────────────────────────────────────────────────────
-
-// Renders the full-page unavailable shell used both by the loader-error path
-// (file state known before mount) and the runtimeUnavailable path (state
-// discovered during an active session). Accepts an optional report panel slot
-// so the caller controls eligibility without coupling this component to report state.
-function UnavailableFilePage({
-  code,
-  info,
-  reportPanel
-}: {
-  code: string;
-  info: UnavailabilityInfo;
-  reportPanel?: ReactNode;
-}) {
-  return (
-    <SiteFrame eyebrow="File link" title={info.label} summary={info.message} noRail>
-      <section className="panel panel--unavailable">
-        <div className="unavail-icon" aria-hidden="true">
-          {getUnavailabilityIcon(code)}
-        </div>
-        <p className="unavail-message">{info.message}</p>
-        <div className="action-row">
-          <Link to="/" className="button-link">
-            Share a new file
-          </Link>
-        </div>
-      </section>
-      {reportPanel}
-    </SiteFrame>
-  );
-}
 
 // ─── Main share page component ────────────────────────────────────────────────
 
@@ -484,9 +134,7 @@ function SharePageContent() {
   const [reportOpen, setReportOpen] = useState(initialUiState.reportOpen);
   const [reportReason, setReportReason] = useState<ReportReason>(initialUiState.reportReason);
   const [reportMessage, setReportMessage] = useState(initialUiState.reportMessage);
-  const [reportPhase, setReportPhase] = useState<'idle' | 'submitting' | 'success' | 'error'>(
-    initialUiState.reportPhase
-  );
+  const [reportPhase, setReportPhase] = useState<ReportPhase>(initialUiState.reportPhase);
   const [reportError, setReportError] = useState<string | null>(initialUiState.reportError);
 
   // Abort controllers for in-flight requests so they can be cancelled when the
@@ -660,12 +308,11 @@ function SharePageContent() {
   // ── Unavailable state ───────────────────────────────────────────────────────
   if (!loader.ok || !loader.data) {
     const code = loader.errorCode ?? 'file_unavailable';
-    const info: UnavailabilityInfo = getUnavailabilityInfo(code, loader.errorMessage);
 
     return (
-      <UnavailableFilePage
+      <UnavailableFilePageFromCode
         code={code}
-        info={info}
+        errorMessage={loader.errorMessage}
         reportPanel={
           canReportUnavailableFile(code) ? (
             <PublicReportPanel
@@ -689,12 +336,11 @@ function SharePageContent() {
 
   if (runtimeUnavailable) {
     const code = runtimeUnavailable.code;
-    const info: UnavailabilityInfo = getUnavailabilityInfo(code, runtimeUnavailable.message);
 
     return (
-      <UnavailableFilePage
+      <UnavailableFilePageFromCode
         code={code}
-        info={info}
+        errorMessage={runtimeUnavailable.message}
         reportPanel={
           canReportUnavailableFile(code) ? (
             <PublicReportPanel

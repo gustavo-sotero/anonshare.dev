@@ -92,7 +92,8 @@ describe('About content coverage', () => {
       'Structured logs with request correlation',
       'Health checks that probe real dependencies',
       'Rate limiting on risky public surfaces',
-      'Queue and anomaly visibility in the dashboard'
+      'Queue and anomaly visibility in the dashboard',
+      'Service-backed browser E2E in CI'
     ]);
   });
 

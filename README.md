@@ -117,7 +117,7 @@ If `docker compose up -d` fails with a Docker named pipe error on Windows, start
 bun run db:migrate
 ```
 
-In Module 1 this command is intentionally a no-op because the application schema only starts in Module 2. The root database tooling now derives its local connection settings from the same root `.env` used by Docker Compose, so the command becomes active as soon as schema and migration files are added.
+The root database tooling derives its local connection settings from the same root `.env` used by Docker Compose.
 
 ### 4. Start all services
 
@@ -155,8 +155,10 @@ bun run --cwd apps/web dev
 | `bun run build` | Bundle the web, API, and worker entrypoints |
 | `bun run test` | Run foundational tests |
 | `bun run check` | Biome format + lint with auto-fix |
-| `bun run db:generate` | Generate Drizzle migration files from schema changes; in Module 1 it exits cleanly until schema files exist |
-| `bun run db:migrate` | Apply pending migrations; in Module 1 it exits cleanly until migration files exist |
+| `bun run db:generate` | Generate Drizzle migration files from schema changes |
+| `bun run db:migrate` | Apply pending migrations |
+| `bun run e2e` | Run Playwright browser tests (requires a running local stack) |
+| `bun run e2e:ui` | Open the Playwright interactive test UI |
 | `bun run infra:up` | Start Docker services |
 | `bun run infra:down` | Stop Docker services (keep volumes) |
 | `bun run infra:check` | Verify local PostgreSQL, Redis, and MinIO connectivity |

@@ -18,6 +18,45 @@ export type ReconcileHandlerDeps = {
   setOrphanScanCursor?: (cursor: string | null) => Promise<void>;
 };
 
+/**
+ * Resolved version of `ReconcileHandlerDeps` with all optional cursor helpers
+ * made required and `olderThan` included. Passed down to individual pass
+ * functions after the orchestrator resolves defaults.
+ */
+export type ReconcileResolvedDeps = {
+  db: ReturnType<typeof createDb>;
+  storage: Pick<typeof storageAdapter, 'exists' | 'list'>;
+  cleanupQueue: Queue<CleanupFileJobPayload>;
+  expireQueue: Queue<ExpireFileJobPayload>;
+  getFutureExpirationCursor: () => Promise<string | undefined>;
+  setFutureExpirationCursor: (cursor: string | null) => Promise<void>;
+  getMissingObjectCursor: () => Promise<string | undefined>;
+  setMissingObjectCursor: (cursor: string | null) => Promise<void>;
+  getTerminalCleanupCursor: () => Promise<string | undefined>;
+  setTerminalCleanupCursor: (cursor: string | null) => Promise<void>;
+  getOrphanScanCursor: () => Promise<string | null | undefined>;
+  setOrphanScanCursor: (cursor: string | null) => Promise<void>;
+  olderThan: Date;
+};
+
+/** Mutable counters accumulated during a reconcile run across all passes. */
+export type ReconcileCounters = {
+  staleExpirationsFixed: number;
+  expireJobsRepaired: number;
+  pendingUploadsPromoted: number;
+  pendingUploadsRemoved: number;
+  missingObjectsDetected: number;
+  terminalCleanupEnqueued: number;
+  storageCheckFailures: number;
+  orphanScanFailures: number;
+  orphanedObjectsDetected: number;
+  lifecycleDuplicateJobGroups: number;
+  lifecycleDuplicateJobs: number;
+  lifecycleQueueScanFailures: number;
+  lifecycleQueueReadFailures: number;
+  anomaliesRecorded: number;
+};
+
 export type ReconcileStorageFailurePhase =
   | 'stuck_pending'
   | 'missing_object'

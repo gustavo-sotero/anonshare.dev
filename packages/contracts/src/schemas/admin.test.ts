@@ -307,7 +307,11 @@ describe('operational anomaly admin schemas', () => {
             p95DurationMs: 20
           }
         }
-      ]
+      ],
+      systemSettings: {
+        degraded: false,
+        details: []
+      }
     });
 
     expect(result.success).toBe(true);
@@ -384,7 +388,7 @@ describe('operational anomaly admin schemas', () => {
       sortBy: 'reportCount_desc',
       uploadedWithinDays: '7',
       minReportCount: '3',
-      page: '2',
+      cursor: 'abc123',
       pageSize: '20'
     });
 
@@ -394,7 +398,7 @@ describe('operational anomaly admin schemas', () => {
       sortBy: 'reportCount_desc',
       uploadedWithinDays: 7,
       minReportCount: 3,
-      page: 2,
+      cursor: 'abc123',
       pageSize: 20
     });
   });
@@ -404,7 +408,7 @@ describe('operational anomaly admin schemas', () => {
       status: 'pending',
       reason: 'malware',
       urgency: 'high',
-      page: '1',
+      cursor: 'tok456',
       pageSize: '10'
     });
 
@@ -413,7 +417,7 @@ describe('operational anomaly admin schemas', () => {
       status: 'pending',
       reason: 'malware',
       urgency: 'high',
-      page: 1,
+      cursor: 'tok456',
       pageSize: 10
     });
   });

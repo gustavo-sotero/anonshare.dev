@@ -61,6 +61,25 @@ type GitHubTokenResponse = {
   scope: string;
 };
 
+export function parseGithubTokenResponse(
+  body: Record<string, unknown>
+): { ok: true; data: GitHubTokenResponse } | { ok: false; error: string } {
+  if (typeof body.access_token !== 'string' || !body.access_token) {
+    return { ok: false, error: 'missing or empty access_token' };
+  }
+  if (typeof body.token_type !== 'string' || !body.token_type) {
+    return { ok: false, error: 'missing or empty token_type' };
+  }
+  return {
+    ok: true,
+    data: {
+      access_token: body.access_token,
+      token_type: body.token_type,
+      scope: typeof body.scope === 'string' ? body.scope : ''
+    }
+  };
+}
+
 type GitHubUserResponse = {
   id: number;
   login: string;
@@ -123,11 +142,12 @@ async function defaultExchangeCodeForToken(code: string): Promise<GitHubTokenRes
     throw new Error(`GitHub OAuth error: ${body.error}`);
   }
 
-  if (typeof body.access_token !== 'string') {
-    throw new Error('GitHub token exchange returned no access_token');
+  const tokenParsed = parseGithubTokenResponse(body);
+  if (!tokenParsed.ok) {
+    throw new Error(`GitHub token exchange returned an unexpected shape: ${tokenParsed.error}`);
   }
 
-  return body as unknown as GitHubTokenResponse;
+  return tokenParsed.data;
 }
 
 async function defaultFetchGitHubUser(accessToken: string): Promise<GitHubUserResponse> {

@@ -92,6 +92,7 @@ describe('GET /admin/stats', () => {
           jobs: [{ attemptsMade: 0, processedOn: nowMs - 30_000, finishedOn: nowMs - 25_000 }]
         })
       ],
+      getDb: () => makeAdminDb(),
       now: () => new Date(nowMs)
     });
 
@@ -150,6 +151,36 @@ describe('GET /admin/stats', () => {
       p95DurationMs: null
     });
     expect(body.queueHealth[2].lagMs).toBe(10_000);
+    // systemSettings: DB throws (no mock provided) → all 4 settings degrade with reason db_error
+    expect(body.systemSettings.degraded).toBe(true);
+    expect(body.systemSettings.details).toHaveLength(4);
+    expect(
+      body.systemSettings.details.every((d: { reason: string }) => d.reason === 'db_error')
+    ).toBe(true);
+  });
+
+  test('returns systemSettings.degraded: false when all settings are readable from DB', async () => {
+    const app = buildApp({
+      findSessionById: async () => makeSession({ id: 'session-1' }),
+      getAllowedGithubUserId: () => '123456',
+      listAnomalies: async () => [],
+      listOpenAnomalyCounts: async () => [],
+      listReportStatusCounts: async () => [],
+      listReportCountsByDay: async () => [],
+      listAutoHiddenCountsByDay: async () => [],
+      listResolvedReportCountsByDay: async () => [],
+      listDismissedReportCountsByDay: async () => [],
+      getQueues: () => [],
+      getDb: () => makeAdminDb({ systemSettingsAvailable: true }),
+      now: () => new Date('2026-03-12T12:00:00Z')
+    });
+
+    const response = await request(app, '/admin/stats', { 'x-admin-session-id': 'session-1' });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.systemSettings.degraded).toBe(false);
+    expect(body.systemSettings.details).toHaveLength(0);
   });
 
   test('returns degraded queue snapshot when queue telemetry read fails', async () => {
@@ -175,6 +206,7 @@ describe('GET /admin/stats', () => {
           getJobs: async () => []
         }
       ],
+      getDb: () => makeAdminDb(),
       now: () => new Date('2026-03-12T12:00:00Z')
     });
 
@@ -248,6 +280,7 @@ describe('GET /admin/stats', () => {
       listDismissedReportCountsByDay: async () => [],
       // listRateLimitBlockedCountsByDay intentionally omitted
       getQueues: () => [],
+      getDb: () => makeAdminDb(),
       now: () => new Date('2026-03-12T12:00:00Z')
     });
 

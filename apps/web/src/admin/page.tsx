@@ -29,6 +29,7 @@ import {
   postAdminJson
 } from '~/admin/transport';
 import { SiteFooter } from '~/components/site-footer';
+import { warnClient } from '~/utils/warn-client';
 
 type AdminPageProps = {
   loaderData: AdminRouteLoaderData;
@@ -122,7 +123,9 @@ export function AdminPage({
 
     const result = await logoutAdmin();
     if (!result.ok) {
-      console.warn('[admin] Server-side logout failed; local session cleared.', result.message);
+      warnClient('[admin] Server-side logout failed; local session cleared.', {
+        message: result.message
+      });
       setLogoutWarning(ADMIN_LOGOUT_WARNING_MESSAGE);
     }
 
@@ -146,7 +149,8 @@ export function AdminPage({
     loginActionError,
     routeLoginError
   });
-  const pendingReportsCount = state.kind === 'ready' ? state.reportsTotal : 0;
+  const pendingReportsCount =
+    state.kind === 'ready' ? state.stats.reportTotals.byStatus.pending : 0;
   const anomalyCount = state.kind === 'ready' ? state.anomalies.length : 0;
   const activeTabId = getAdminDashboardTabId(activeTab);
   const activeTabPanelId = getAdminDashboardTabPanelId(activeTab);
@@ -285,8 +289,6 @@ export function AdminPage({
               {activeTab === 'storage' && (
                 <StorageTab
                   data={state}
-                  searchState={searchState}
-                  onUpdateSearch={onUpdateSearch}
                   onInspect={(id) => onNavigate?.(activeTab, id)}
                   onAccessLost={handleAccessLost}
                 />

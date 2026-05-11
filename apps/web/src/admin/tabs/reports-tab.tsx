@@ -14,8 +14,7 @@ import {
   extractErrorMessage,
   fetchAdminReports,
   type OnAdminAccessLost,
-  postAdminJson,
-  REPORT_PAGE_SIZE
+  postAdminJson
 } from '~/admin/transport';
 
 // ─── Filter constants ────────────────────────────────────────────────────────
@@ -59,12 +58,13 @@ export function ReportsTab({
 }) {
   const requestTracker = useRequestTracker();
   const [reports, setReports] = useState<AdminReportSummary[]>([]);
-  const [total, setTotal] = useState(0);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
 
-  const page = searchState?.reportsPage ?? 1;
+  const cursor = searchState?.reportsCursor ?? null;
   const statusFilter = searchState?.reportsStatus ?? 'pending';
   const reasonFilter = searchState?.reportsReason ?? '';
   const urgencyFilter = searchState?.reportsUrgency ?? '';
@@ -75,10 +75,17 @@ export function ReportsTab({
     await runTrackedRequest({
       tracker: requestTracker,
       run: (signal) =>
-        fetchAdminReports(statusFilter, page, reasonFilter || null, urgencyFilter || null, signal),
+        fetchAdminReports(
+          statusFilter,
+          cursor,
+          reasonFilter || null,
+          urgencyFilter || null,
+          signal
+        ),
       onSuccess: (res) => {
         setReports(res.reports);
-        setTotal(res.total);
+        setNextCursor(res.nextCursor);
+        setHasMore(res.hasMore);
       },
       onError: (err: unknown) => {
         if (err instanceof AdminAccessError) {
@@ -89,7 +96,7 @@ export function ReportsTab({
       },
       onFinally: () => setIsLoading(false)
     });
-  }, [onAccessLost, page, reasonFilter, requestTracker, statusFilter, urgencyFilter]);
+  }, [onAccessLost, cursor, reasonFilter, requestTracker, statusFilter, urgencyFilter]);
 
   useEffect(() => {
     void loadReports();
@@ -137,14 +144,13 @@ export function ReportsTab({
     }
   };
 
-  const totalPages = Math.ceil(total / REPORT_PAGE_SIZE);
-
   return (
     <section className="panel">
       <div className="panel__row">
         <p className="panel__label">Reports</p>
         <span className="chip chip--outline">
-          {formatCount(total)} {statusFilter}
+          {formatCount(reports.length)}
+          {hasMore ? '+' : ''} {statusFilter}
         </span>
       </div>
 
@@ -156,7 +162,7 @@ export function ReportsTab({
             type="button"
             aria-pressed={statusFilter === f.value}
             className={`admin-nav__tab ${statusFilter === f.value ? 'admin-nav__tab--active' : ''}`}
-            onClick={() => onUpdateSearch?.({ reportsStatus: f.value, reportsPage: 1 })}
+            onClick={() => onUpdateSearch?.({ reportsStatus: f.value, reportsCursor: undefined })}
           >
             {f.label}
           </button>
@@ -171,7 +177,9 @@ export function ReportsTab({
             type="button"
             aria-pressed={reasonFilter === option.value}
             className={`admin-nav__tab admin-nav__tab--sm ${reasonFilter === option.value ? 'admin-nav__tab--active' : ''}`}
-            onClick={() => onUpdateSearch?.({ reportsReason: option.value, reportsPage: 1 })}
+            onClick={() =>
+              onUpdateSearch?.({ reportsReason: option.value, reportsCursor: undefined })
+            }
           >
             {option.label}
           </button>
@@ -186,7 +194,9 @@ export function ReportsTab({
             type="button"
             aria-pressed={urgencyFilter === option.value}
             className={`admin-nav__tab admin-nav__tab--sm ${urgencyFilter === option.value ? 'admin-nav__tab--active' : ''}`}
-            onClick={() => onUpdateSearch?.({ reportsUrgency: option.value, reportsPage: 1 })}
+            onClick={() =>
+              onUpdateSearch?.({ reportsUrgency: option.value, reportsCursor: undefined })
+            }
           >
             {option.label}
           </button>
@@ -270,27 +280,27 @@ export function ReportsTab({
         </div>
       )}
 
-      {totalPages > 1 ? (
+      {hasMore || cursor ? (
         <div className="report-card__actions" style={{ marginTop: 14 }}>
-          <button
-            type="button"
-            className="button-link button-link--ghost button-link--sm"
-            disabled={page <= 1}
-            onClick={() => onUpdateSearch?.({ reportsPage: Math.max(1, page - 1) })}
-          >
-            ← Previous
-          </button>
-          <span className="chip chip--outline">
-            Page {page} of {totalPages}
-          </span>
-          <button
-            type="button"
-            className="button-link button-link--ghost button-link--sm"
-            disabled={page >= totalPages}
-            onClick={() => onUpdateSearch?.({ reportsPage: page + 1 })}
-          >
-            Next →
-          </button>
+          {cursor ? (
+            <button
+              type="button"
+              className="button-link button-link--ghost button-link--sm"
+              onClick={() => onUpdateSearch?.({ reportsCursor: undefined })}
+            >
+              ← First page
+            </button>
+          ) : null}
+          {hasMore ? (
+            <button
+              type="button"
+              className="button-link button-link--ghost button-link--sm"
+              disabled={!nextCursor}
+              onClick={() => nextCursor && onUpdateSearch?.({ reportsCursor: nextCursor })}
+            >
+              Next →
+            </button>
+          ) : null}
         </div>
       ) : null}
     </section>

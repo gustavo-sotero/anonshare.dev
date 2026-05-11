@@ -109,6 +109,30 @@ export function OverviewTab({ data }: { data: DashboardData }) {
           </article>
         </div>
       </section>
+
+      {stats.systemSettings.degraded && (
+        <section className="panel panel--warning">
+          <p className="panel__label">System settings degraded</p>
+          <p className="panel__copy">
+            One or more runtime settings could not be read from the database and are using default
+            values. Operator-configured thresholds may not be active.
+          </p>
+          <ul className="degraded-settings-list">
+            {stats.systemSettings.details.map((entry) => (
+              <li key={entry.key} className="degraded-settings-list__item">
+                <code className="degraded-settings-list__key">{entry.key}</code>
+                <span className="degraded-settings-list__reason">
+                  {entry.reason === 'missing'
+                    ? 'row not found'
+                    : entry.reason === 'invalid_value'
+                      ? 'stored value is invalid'
+                      : 'database error'}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </>
   );
 }

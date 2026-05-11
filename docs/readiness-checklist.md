@@ -128,6 +128,7 @@ Execute each flow end-to-end in the target environment.
 - [ ] CI uses containerized PostgreSQL, Redis, and MinIO for tests that need them
 - [ ] CI validates migration drift (`db:generate` + clean git diff on migrations)
 - [ ] The `bun run verify` local gate mirrors the CI gate
+- [ ] Browser E2E tests (Playwright) pass in CI against a full running stack
 
 ## 6. Performance Checks
 

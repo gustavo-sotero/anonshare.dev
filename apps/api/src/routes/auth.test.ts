@@ -3,7 +3,7 @@ import { adminLoginStartResponseSchema } from '@anonshare/contracts';
 import type { OAuthStateRepository } from '@anonshare/infrastructure/auth';
 import type { createDb } from '@anonshare/infrastructure/db';
 import { Hono } from 'hono';
-import { type AuthRouterDeps, createAuthRouter } from './auth';
+import { type AuthRouterDeps, createAuthRouter, parseGithubTokenResponse } from './auth';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -510,5 +510,64 @@ describe('OAuth state durability across router instances', () => {
     );
     expect(second.status).toBe(302);
     expect(second.headers.get('location')).toContain('error=state_expired');
+  });
+});
+
+// ─── parseGithubTokenResponse ─────────────────────────────────────────────────
+
+describe('parseGithubTokenResponse', () => {
+  test('accepts a valid token response with all fields', () => {
+    const result = parseGithubTokenResponse({
+      access_token: 'gho_abc123',
+      token_type: 'bearer',
+      scope: 'read:user'
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      data: { access_token: 'gho_abc123', token_type: 'bearer', scope: 'read:user' }
+    });
+  });
+
+  test('defaults scope to empty string when absent', () => {
+    const result = parseGithubTokenResponse({
+      access_token: 'gho_abc123',
+      token_type: 'bearer'
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      data: { access_token: 'gho_abc123', token_type: 'bearer', scope: '' }
+    });
+  });
+
+  test('rejects body missing access_token', () => {
+    const result = parseGithubTokenResponse({ token_type: 'bearer', scope: 'read:user' });
+
+    expect(result).toEqual({ ok: false, error: 'missing or empty access_token' });
+  });
+
+  test('rejects body with empty access_token', () => {
+    const result = parseGithubTokenResponse({ access_token: '', token_type: 'bearer' });
+
+    expect(result).toEqual({ ok: false, error: 'missing or empty access_token' });
+  });
+
+  test('rejects body with non-string access_token', () => {
+    const result = parseGithubTokenResponse({ access_token: 42, token_type: 'bearer' });
+
+    expect(result).toEqual({ ok: false, error: 'missing or empty access_token' });
+  });
+
+  test('rejects body missing token_type', () => {
+    const result = parseGithubTokenResponse({ access_token: 'gho_abc123' });
+
+    expect(result).toEqual({ ok: false, error: 'missing or empty token_type' });
+  });
+
+  test('rejects body with empty token_type', () => {
+    const result = parseGithubTokenResponse({ access_token: 'gho_abc123', token_type: '' });
+
+    expect(result).toEqual({ ok: false, error: 'missing or empty token_type' });
   });
 });

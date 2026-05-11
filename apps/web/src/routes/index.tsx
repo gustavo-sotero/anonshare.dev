@@ -3,6 +3,7 @@ import { createFileRoute, Link } from '@tanstack/react-router';
 import { useCallback, useRef, useState } from 'react';
 import { SiteFrame } from '~/components/site-frame';
 import { formatDateDeterministic } from '~/share/date-format';
+import { formatBytes } from '~/utils/format';
 
 export const Route = createFileRoute('/')({
   head: () => ({
@@ -35,13 +36,6 @@ const EXPIRATION_MS: Record<ExpirationPreset, number> = {
   '7d': 7 * 24 * 60 * 60 * 1000,
   '30d': 30 * 24 * 60 * 60 * 1000
 };
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
 
 function expiresAtFromPreset(preset: ExpirationPreset): string {
   return new Date(Date.now() + EXPIRATION_MS[preset]).toISOString();
@@ -296,6 +290,7 @@ export function HomePage() {
               <div
                 className="upload-progress"
                 role="progressbar"
+                aria-label="Upload progress"
                 aria-valuenow={phase.progress}
                 aria-valuemin={0}
                 aria-valuemax={100}

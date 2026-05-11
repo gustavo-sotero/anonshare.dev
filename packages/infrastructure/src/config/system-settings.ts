@@ -83,18 +83,82 @@ export function resolveSystemSetting(name: SystemSettingName, rawValue?: string 
   return parseSystemSettingValue(name, rawValue);
 }
 
-export async function loadSystemSettingOrDefault(db: Db, name: SystemSettingName): Promise<number> {
+export type SystemSettingFallbackReason = 'missing' | 'invalid_value' | 'db_error';
+
+export type SystemSettingReadResult =
+  | { value: number; degraded: false }
+  | { value: number; degraded: true; reason: SystemSettingFallbackReason; detail?: string };
+
+/**
+ * Reads a system setting from the database and returns a structured result that
+ * distinguishes a successful read from a fallback, and classifies the fallback reason.
+ *
+ * Never throws. The caller receives the default value regardless of why the fallback
+ * occurred, but the `degraded` flag lets upstream code emit telemetry or surface the
+ * failure in the admin dashboard.
+ */
+export async function readSystemSetting(
+  db: Db,
+  name: SystemSettingName
+): Promise<SystemSettingReadResult> {
   const definition = SYSTEM_SETTING_DEFINITIONS[name];
+
+  let rawValue: string | null | undefined;
 
   try {
     const row = await db.query.systemSettings.findFirst({
       where: eq(systemSettings.key, definition.key)
     });
-
-    return resolveSystemSetting(name, row?.value);
-  } catch {
-    return getSystemSettingDefault(name);
+    rawValue = row?.value;
+  } catch (err) {
+    return {
+      value: getSystemSettingDefault(name),
+      degraded: true,
+      reason: 'db_error',
+      detail: err instanceof Error ? err.message : String(err)
+    };
   }
+
+  if (rawValue == null) {
+    return { value: getSystemSettingDefault(name), degraded: true, reason: 'missing' };
+  }
+
+  try {
+    return { value: parseSystemSettingValue(name, rawValue), degraded: false };
+  } catch (err) {
+    return {
+      value: getSystemSettingDefault(name),
+      degraded: true,
+      reason: 'invalid_value',
+      detail: err instanceof Error ? err.message : String(err)
+    };
+  }
+}
+
+/**
+ * Reads a system setting from the database and returns the numeric value, falling back
+ * to the configured default on any error.  Emits a structured warning via the optional
+ * `log` argument when a fallback is taken so operators can see the failure reason in
+ * logs or admin telemetry without changing the business default behaviour.
+ */
+export async function loadSystemSettingOrDefault(
+  db: Db,
+  name: SystemSettingName,
+  log?: { warn: (message: string, ctx: Record<string, unknown>) => void }
+): Promise<number> {
+  const result = await readSystemSetting(db, name);
+
+  if (result.degraded) {
+    const definition = SYSTEM_SETTING_DEFINITIONS[name];
+    log?.warn('[system-settings] Falling back to default value', {
+      event: 'system_settings.fallback',
+      key: definition.key,
+      reason: result.reason,
+      ...(result.detail ? { detail: result.detail } : {})
+    });
+  }
+
+  return result.value;
 }
 
 export const SYSTEM_SETTING_DEFAULTS: readonly SystemSettingSeed[] = Object.freeze(

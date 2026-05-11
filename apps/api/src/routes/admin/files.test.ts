@@ -12,7 +12,7 @@ import {
 
 describe('GET /admin/files', () => {
   test('returns 401 when no session is present', async () => {
-    const db = makeAdminDb({ selectResults: [[], [{ total: 0 }]] });
+    const db = makeAdminDb({ selectResults: [[]] });
     const app = buildApp({
       ...makeAuthDeps(db),
       findSessionById: async () => null
@@ -24,7 +24,7 @@ describe('GET /admin/files', () => {
 
   test('returns paginated file list', async () => {
     const file = makeAdminFile();
-    const db = makeAdminDb({ selectResults: [[file], [{ total: 1 }]] });
+    const db = makeAdminDb({ selectResults: [[file]] });
     const app = buildApp(makeAuthDeps(db));
 
     const response = await request(app, '/admin/files', { 'x-admin-session-id': 'session-1' });
@@ -33,13 +33,12 @@ describe('GET /admin/files', () => {
     expect(response.status).toBe(200);
     expect(body.files).toHaveLength(1);
     expect(body.files[0].id).toBe(file.id);
-    expect(body.total).toBe(1);
-    expect(body.page).toBe(1);
-    expect(body.pageSize).toBe(50);
+    expect(body.hasMore).toBe(false);
+    expect(body.nextCursor).toBeNull();
   });
 
   test('returns empty list when no files exist', async () => {
-    const db = makeAdminDb({ selectResults: [[], [{ total: 0 }]] });
+    const db = makeAdminDb({ selectResults: [[]] });
     const app = buildApp(makeAuthDeps(db));
 
     const response = await request(app, '/admin/files', { 'x-admin-session-id': 'session-1' });
@@ -47,11 +46,11 @@ describe('GET /admin/files', () => {
 
     expect(response.status).toBe(200);
     expect(body.files).toHaveLength(0);
-    expect(body.total).toBe(0);
+    expect(body.hasMore).toBe(false);
   });
 
   test('accepts optional status filter', async () => {
-    const db = makeAdminDb({ selectResults: [[], [{ total: 0 }]] });
+    const db = makeAdminDb({ selectResults: [[]] });
     const app = buildApp(makeAuthDeps(db));
 
     const response = await request(app, '/admin/files?status=hidden', {
@@ -61,7 +60,7 @@ describe('GET /admin/files', () => {
   });
 
   test('accepts policy, upload window, and minimum report count filters', async () => {
-    const db = makeAdminDb({ selectResults: [[], [{ total: 0 }]] });
+    const db = makeAdminDb({ selectResults: [[]] });
     const app = buildApp(makeAuthDeps(db));
 
     const response = await request(
@@ -76,7 +75,7 @@ describe('GET /admin/files', () => {
   });
 
   test('accepts sortBy=sizeBytes_desc', async () => {
-    const db = makeAdminDb({ selectResults: [[], [{ total: 0 }]] });
+    const db = makeAdminDb({ selectResults: [[]] });
     const app = buildApp(makeAuthDeps(db));
 
     const response = await request(app, '/admin/files?sortBy=sizeBytes_desc', {
@@ -84,11 +83,11 @@ describe('GET /admin/files', () => {
     });
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body).toMatchObject({ files: [], total: 0, page: 1 });
+    expect(body).toMatchObject({ files: [], hasMore: false, nextCursor: null });
   });
 
   test('accepts sortBy=reportCount_desc', async () => {
-    const db = makeAdminDb({ selectResults: [[], [{ total: 0 }]] });
+    const db = makeAdminDb({ selectResults: [[]] });
     const app = buildApp(makeAuthDeps(db));
 
     const response = await request(app, '/admin/files?sortBy=reportCount_desc', {
@@ -115,6 +114,55 @@ describe('GET /admin/files', () => {
       'x-admin-session-id': 'session-1'
     });
     expect(response.status).toBe(400);
+  });
+
+  test('accepts a valid uploadedAt_desc cursor and returns the first page', async () => {
+    const cursor = Buffer.from(
+      JSON.stringify({ s: '2026-01-01T00:00:00.000Z', i: '00000000-0000-4000-8000-000000000001' }),
+      'utf-8'
+    ).toString('base64url');
+
+    const db = makeAdminDb({ selectResults: [[]] });
+    const app = buildApp(makeAuthDeps(db));
+
+    const response = await request(app, `/admin/files?cursor=${encodeURIComponent(cursor)}`, {
+      'x-admin-session-id': 'session-1'
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ files: [], hasMore: false, nextCursor: null });
+  });
+
+  test('accepts a valid sizeBytes_desc cursor and returns the first page', async () => {
+    const cursor = Buffer.from(
+      JSON.stringify({ s: 4096, i: '00000000-0000-4000-8000-000000000002' }),
+      'utf-8'
+    ).toString('base64url');
+
+    const db = makeAdminDb({ selectResults: [[]] });
+    const app = buildApp(makeAuthDeps(db));
+
+    const response = await request(
+      app,
+      `/admin/files?sortBy=sizeBytes_desc&cursor=${encodeURIComponent(cursor)}`,
+      { 'x-admin-session-id': 'session-1' }
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  test('falls back to first page when cursor is malformed', async () => {
+    const db = makeAdminDb({ selectResults: [[]] });
+    const app = buildApp(makeAuthDeps(db));
+
+    const response = await request(app, '/admin/files?cursor=not-valid-base64url', {
+      'x-admin-session-id': 'session-1'
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ files: [], hasMore: false, nextCursor: null });
   });
 });
 

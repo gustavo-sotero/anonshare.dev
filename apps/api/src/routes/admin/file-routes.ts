@@ -5,7 +5,7 @@ import {
   files,
   reports
 } from '@anonshare/infrastructure/db/schema';
-import { and, count, desc, eq, gte } from 'drizzle-orm';
+import { and, count, desc, eq, gte, lt, or, type SQL } from 'drizzle-orm';
 import type { Hono } from 'hono';
 import { logger } from '../../logger';
 import { getRequestId } from '../support';
@@ -27,7 +27,7 @@ export function registerAdminFileRoutes(router: Hono, resolvedDeps: ResolvedAdmi
       sortBy: c.req.query('sortBy'),
       uploadedWithinDays: c.req.query('uploadedWithinDays'),
       minReportCount: c.req.query('minReportCount'),
-      page: c.req.query('page'),
+      cursor: c.req.query('cursor'),
       pageSize: c.req.query('pageSize')
     });
 
@@ -38,9 +38,8 @@ export function registerAdminFileRoutes(router: Hono, resolvedDeps: ResolvedAdmi
       );
     }
 
-    const { status, policy, sortBy, uploadedWithinDays, minReportCount, page, pageSize } =
+    const { status, policy, sortBy, uploadedWithinDays, minReportCount, cursor, pageSize } =
       queryParsed.data;
-    const offset = (page - 1) * pageSize;
 
     const orderByClause =
       sortBy === 'sizeBytes_desc'
@@ -84,14 +83,70 @@ export function registerAdminFileRoutes(router: Hono, resolvedDeps: ResolvedAdmi
         where = where ? and(where, minReportCountCondition) : minReportCountCondition;
       }
 
-      const [rows, [totalRow]] = await Promise.all([
-        db.select().from(files).where(where).orderBy(orderByClause).limit(pageSize).offset(offset),
-        db.select({ total: count() }).from(files).where(where)
-      ]);
+      // Decode and apply cursor for keyset pagination.
+      if (cursor) {
+        try {
+          const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf-8')) as {
+            s: unknown;
+            i: unknown;
+          };
+          if (typeof decoded.i === 'string') {
+            let cursorCondition: SQL | undefined;
+            if (sortBy === 'sizeBytes_desc' && typeof decoded.s === 'number') {
+              cursorCondition = or(
+                lt(files.sizeBytes, decoded.s),
+                and(eq(files.sizeBytes, decoded.s), lt(files.id, decoded.i))
+              );
+            } else if (sortBy === 'reportCount_desc' && typeof decoded.s === 'number') {
+              cursorCondition = or(
+                lt(files.reportCount, decoded.s),
+                and(eq(files.reportCount, decoded.s), lt(files.id, decoded.i))
+              );
+            } else if (typeof decoded.s === 'string') {
+              // uploadedAt_desc: cursor sort value is an ISO date string
+              const cursorDate = new Date(decoded.s);
+              cursorCondition = or(
+                lt(files.uploadedAt, cursorDate),
+                and(eq(files.uploadedAt, cursorDate), lt(files.id, decoded.i))
+              );
+            }
+            if (cursorCondition) {
+              where = where ? and(where, cursorCondition) : cursorCondition;
+            }
+          }
+        } catch {
+          // Malformed cursor — ignore and return first page.
+        }
+      }
+
+      // Fetch one extra row to determine whether a next page exists.
+      const rows = await db
+        .select()
+        .from(files)
+        .where(where)
+        .orderBy(orderByClause)
+        .limit(pageSize + 1);
+
+      const hasMore = rows.length > pageSize;
+      const pageRows = hasMore ? rows.slice(0, pageSize) : rows;
+      const lastRow = pageRows[pageRows.length - 1];
+
+      let nextCursor: string | null = null;
+      if (hasMore && lastRow) {
+        const sortValue =
+          sortBy === 'sizeBytes_desc'
+            ? lastRow.sizeBytes
+            : sortBy === 'reportCount_desc'
+              ? lastRow.reportCount
+              : lastRow.uploadedAt.toISOString();
+        nextCursor = Buffer.from(JSON.stringify({ s: sortValue, i: lastRow.id })).toString(
+          'base64url'
+        );
+      }
 
       return c.json(
         {
-          files: rows.map((f) => ({
+          files: pageRows.map((f) => ({
             id: f.id,
             token: f.token,
             sanitizedFilename: f.sanitizedFilename,
@@ -107,9 +162,8 @@ export function registerAdminFileRoutes(router: Hono, resolvedDeps: ResolvedAdmi
             consumedAt: f.consumedAt?.toISOString() ?? null,
             deletedAt: f.deletedAt?.toISOString() ?? null
           })),
-          total: totalRow?.total ?? 0,
-          page,
-          pageSize
+          nextCursor,
+          hasMore
         },
         200
       );
@@ -288,7 +342,7 @@ export function registerAdminFileRoutes(router: Hono, resolvedDeps: ResolvedAdmi
     if (!auth.ok) return auth.response;
 
     const requestId = getRequestId(c);
-    const fileId = c.req.param('id');
+    const fileParam = c.req.param('id');
 
     let body: unknown;
     try {
@@ -315,11 +369,20 @@ export function registerAdminFileRoutes(router: Hono, resolvedDeps: ResolvedAdmi
     try {
       const db = resolvedDeps.getDb();
       const now = resolvedDeps.now();
-      const file = await db.query.files.findFirst({ where: eq(files.id, fileId) });
+
+      // Accept either a UUID (from admin dashboard) or a share token (from E2E / API callers).
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const fileWhere = UUID_RE.test(fileParam)
+        ? eq(files.id, fileParam)
+        : eq(files.token, fileParam);
+      const file = await db.query.files.findFirst({ where: fileWhere });
 
       if (!file) {
         return c.json({ ok: false, error: { code: 'not_found', message: 'File not found.' } }, 404);
       }
+
+      // Use the resolved UUID for all subsequent DB operations.
+      const fileId = file.id;
 
       let nextStatus: typeof file.status;
       let latestHiddenPreviousStatus: typeof file.status | null = null;
@@ -455,7 +518,7 @@ export function registerAdminFileRoutes(router: Hono, resolvedDeps: ResolvedAdmi
         event: 'admin_moderation_action_failed',
         requestId,
         actor: 'admin',
-        entity: { type: 'file', id: fileId },
+        entity: { type: 'file', id: fileParam },
         outcome: 'failure',
         error: err instanceof Error ? err.message : String(err)
       });

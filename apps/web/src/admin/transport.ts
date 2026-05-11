@@ -38,7 +38,6 @@ export type DashboardData = {
   overview: AdminOverviewResponse;
   anomalies: OperationalAnomalySummary[];
   reports: AdminReportSummary[];
-  reportsTotal: number;
   refreshedAt: string;
 };
 
@@ -192,16 +191,16 @@ export async function fetchAdminAnomalies(signal?: AbortSignal): Promise<AdminAn
 
 export async function fetchAdminReports(
   status: string,
-  page: number,
+  cursor: string | null,
   reason: string | null,
   urgency: string | null,
   signal?: AbortSignal
 ): Promise<AdminReportListResponse> {
   const params = new URLSearchParams({
     status,
-    page: String(page),
     pageSize: String(REPORT_PAGE_SIZE)
   });
+  if (cursor) params.set('cursor', cursor);
   if (reason) params.set('reason', reason);
   if (urgency) params.set('urgency', urgency);
   const body = await fetchAdminJson(`/api/admin/reports?${params.toString()}`, signal);
@@ -216,10 +215,11 @@ export async function fetchAdminFiles(
   sortBy: string,
   uploadedWithinDays: number | null,
   minReportCount: number | null,
-  page: number,
+  cursor: string | null,
   signal?: AbortSignal
 ): Promise<AdminFileListResponse> {
-  const params = new URLSearchParams({ page: String(page), pageSize: String(FILE_PAGE_SIZE) });
+  const params = new URLSearchParams({ pageSize: String(FILE_PAGE_SIZE) });
+  if (cursor) params.set('cursor', cursor);
   if (status) params.set('status', status);
   if (policy) params.set('policy', policy);
   params.set('sortBy', sortBy);
@@ -268,7 +268,7 @@ export async function loadDashboardState(signal?: AbortSignal): Promise<Dashboar
     fetchAdminStats(signal),
     fetchAdminOverview(signal),
     fetchAdminAnomalies(signal),
-    fetchAdminReports('pending', 1, null, null, signal)
+    fetchAdminReports('pending', null, null, null, signal)
   ]);
 
   return {
@@ -278,7 +278,6 @@ export async function loadDashboardState(signal?: AbortSignal): Promise<Dashboar
     overview: overviewResponse,
     anomalies: anomaliesResponse.anomalies,
     reports: reportsResponse.reports,
-    reportsTotal: reportsResponse.total,
     refreshedAt: new Date().toISOString()
   };
 }

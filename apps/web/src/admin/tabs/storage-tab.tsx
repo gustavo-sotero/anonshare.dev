@@ -4,44 +4,35 @@ import { AdminAccessError } from '~/admin/access';
 import { buildStorageHighlights } from '~/admin/dashboard';
 import { formatBytes, formatCount, formatDateTime, formatFileStatus } from '~/admin/formatters';
 import { runTrackedRequest, useRequestTracker } from '~/admin/request-tracker';
-import type { AdminSearchParams, AdminSearchUpdate } from '~/admin/search-params';
-import {
-  type DashboardData,
-  FILE_PAGE_SIZE,
-  fetchAdminFiles,
-  type OnAdminAccessLost
-} from '~/admin/transport';
+import { type DashboardData, fetchAdminFiles, type OnAdminAccessLost } from '~/admin/transport';
 
 export function StorageTab({
   data,
-  searchState,
-  onUpdateSearch,
   onInspect,
   onAccessLost
 }: {
   data: DashboardData;
-  searchState?: AdminSearchParams | undefined;
-  onUpdateSearch?: ((updates: AdminSearchUpdate) => void) | undefined;
   onInspect: (fileId: string) => void;
   onAccessLost: OnAdminAccessLost;
 }) {
   const requestTracker = useRequestTracker();
   const [files, setFiles] = useState<AdminFileSummary[]>([]);
-  const [total, setTotal] = useState(0);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  const page = searchState?.storagePage ?? 1;
 
   useEffect(() => {
     setIsLoading(true);
     setError(null);
     void runTrackedRequest({
       tracker: requestTracker,
-      run: (signal) => fetchAdminFiles(null, null, 'sizeBytes_desc', null, null, page, signal),
+      run: (signal) => fetchAdminFiles(null, null, 'sizeBytes_desc', null, null, cursor, signal),
       onSuccess: (res) => {
         setFiles(res.files);
-        setTotal(res.total);
+        setNextCursor(res.nextCursor);
+        setHasMore(res.hasMore);
       },
       onError: (err: unknown) => {
         if (err instanceof AdminAccessError) {
@@ -52,10 +43,9 @@ export function StorageTab({
       },
       onFinally: () => setIsLoading(false)
     });
-  }, [onAccessLost, page, requestTracker]);
+  }, [cursor, onAccessLost, requestTracker]);
 
   const highlights = buildStorageHighlights(data.overview, files);
-  const totalPages = Math.ceil(total / FILE_PAGE_SIZE);
 
   return (
     <section className="panel">
@@ -101,7 +91,10 @@ export function StorageTab({
 
       <div className="panel__row" style={{ marginTop: 20 }}>
         <p className="panel__label">Largest files</p>
-        <span className="chip chip--outline">{formatCount(total)} tracked</span>
+        <span className="chip chip--outline">
+          {formatCount(files.length)}
+          {hasMore ? '+' : ''} tracked
+        </span>
       </div>
 
       {error ? <p className="upload-error">{error}</p> : null}
@@ -143,24 +136,21 @@ export function StorageTab({
         </div>
       )}
 
-      {totalPages > 1 ? (
+      {cursor !== null || hasMore ? (
         <div className="report-card__actions" style={{ marginTop: 14 }}>
           <button
             type="button"
             className="button-link button-link--ghost button-link--sm"
-            disabled={page <= 1}
-            onClick={() => onUpdateSearch?.({ storagePage: Math.max(1, page - 1) })}
+            disabled={cursor === null}
+            onClick={() => setCursor(null)}
           >
-            ← Previous
+            ← First page
           </button>
-          <span className="chip chip--outline">
-            Page {page} of {totalPages}
-          </span>
           <button
             type="button"
             className="button-link button-link--ghost button-link--sm"
-            disabled={page >= totalPages}
-            onClick={() => onUpdateSearch?.({ storagePage: page + 1 })}
+            disabled={!hasMore}
+            onClick={() => setCursor(nextCursor)}
           >
             Next →
           </button>

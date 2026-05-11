@@ -142,7 +142,7 @@ export const ABOUT_ARCHITECTURE = [
     name: 'apps/worker',
     purpose: 'Async lifecycle work',
     detail:
-      'BullMQ consumers on Bun. Processes expiration, cleanup, one-time post-download removal, and periodic reconciliation jobs.'
+      'BullMQ consumers on Bun. Processes expiration, cleanup, one-time post-download removal, and periodic reconciliation jobs. The reconciler is decomposed into independent passes (orphan detection, expired cleanup, pending promotion, one-time cleanup, terminal jobs, stale expiration, and cursor advancement) so each concern can be tested, retried, and observed in isolation.'
   },
   {
     kind: 'package' as const,
@@ -217,7 +217,12 @@ export const ABOUT_OPERATIONS = [
   {
     eyebrow: 'Operator UX',
     title: 'Queue and anomaly visibility in the dashboard',
-    body: 'The admin surface exposes queue lag, failed jobs, report pressure, and lifecycle anomalies so moderation and operational issues do not stay invisible.'
+    body: 'The admin surface exposes queue lag, failed jobs, report pressure, and lifecycle anomalies so moderation and operational issues do not stay invisible. System settings such as the rate-limit degraded flag are surfaced separately so an operator can tell at a glance when a backing service is running in a reduced-capability mode.'
+  },
+  {
+    eyebrow: 'Verification',
+    title: 'Service-backed browser E2E in CI',
+    body: 'Playwright tests run against the full local stack (web + API + worker + all dependencies) in CI. They cover the anonymous upload flow, one-time download consumption, share-page unavailability states, and admin hide/restore affecting public visibility — the cross-process behaviors that unit tests cannot reach.'
   }
 ];
 

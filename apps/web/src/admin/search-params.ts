@@ -34,14 +34,14 @@ export type AdminSearchParams = {
   tab?: AdminTab;
   fileId?: string;
   // Files tab filters and pagination
-  filesPage?: number;
+  filesCursor?: string;
   filesStatus?: FilesStatusFilter;
   filesPolicy?: FilesPolicyFilter;
   filesSortBy?: FilesSortBy;
   filesDays?: number;
   filesMinReports?: number;
   // Reports tab filters and pagination
-  reportsPage?: number;
+  reportsCursor?: string;
   reportsStatus?: ReportsStatusFilter;
   reportsReason?: ReportsReasonFilter;
   reportsUrgency?: ReportsUrgencyFilter;
@@ -112,8 +112,9 @@ export function parseAdminSearchParams(search: Record<string, unknown>): AdminSe
   }
 
   // Files tab
-  const filesPage = parsePositiveInt(search.filesPage);
-  if (filesPage !== undefined) params.filesPage = filesPage;
+  if (typeof search.filesCursor === 'string' && search.filesCursor.length > 0) {
+    params.filesCursor = search.filesCursor;
+  }
 
   if (typeof search.filesStatus === 'string' && FILES_STATUS_VALUES.has(search.filesStatus)) {
     params.filesStatus = search.filesStatus as FilesStatusFilter;
@@ -134,8 +135,9 @@ export function parseAdminSearchParams(search: Record<string, unknown>): AdminSe
   if (filesMinReports !== undefined) params.filesMinReports = filesMinReports;
 
   // Reports tab
-  const reportsPage = parsePositiveInt(search.reportsPage);
-  if (reportsPage !== undefined) params.reportsPage = reportsPage;
+  if (typeof search.reportsCursor === 'string' && search.reportsCursor.length > 0) {
+    params.reportsCursor = search.reportsCursor;
+  }
 
   if (typeof search.reportsStatus === 'string' && REPORTS_STATUS_VALUES.has(search.reportsStatus)) {
     params.reportsStatus = search.reportsStatus as ReportsStatusFilter;

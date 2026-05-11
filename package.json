@@ -28,7 +28,9 @@
     "verify:deps": "bun run infra:check",
     "verify:bullmq": "bun packages/infrastructure/src/scripts/check-bullmq-version.ts",
     "verify:migrations": "bun run db:generate && git diff --exit-code -- packages/infrastructure/src/db/migrations && bun run db:migrate",
-    "verify": "bun run verify:repo && bun run verify:deps && bun run verify:bullmq && bun run typecheck && bun run lint && bun run test && bun run build && bun run verify:migrations"
+    "verify": "bun run verify:repo && bun run verify:deps && bun run verify:bullmq && bun run typecheck && bun run lint && bun run test && bun run build && bun run verify:migrations",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui"
   },
   "overrides": {
     "chokidar": "^4.0.3",
@@ -38,6 +40,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.14",
+    "@playwright/test": "^1.60.0",
     "typescript": "^6.0.3"
   }
 }

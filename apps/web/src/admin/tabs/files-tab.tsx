@@ -5,7 +5,7 @@ import { canHideFileStatus, confirmModerationAction } from '~/admin/dashboard';
 import { formatBytes, formatCount, formatDateTime, formatFileStatus } from '~/admin/formatters';
 import { runTrackedRequest, useRequestTracker } from '~/admin/request-tracker';
 import type { AdminSearchParams, AdminSearchUpdate } from '~/admin/search-params';
-import { FILE_PAGE_SIZE, fetchAdminFiles, type OnAdminAccessLost } from '~/admin/transport';
+import { fetchAdminFiles, type OnAdminAccessLost } from '~/admin/transport';
 
 // ─── Filter constants ────────────────────────────────────────────────────────
 
@@ -62,12 +62,13 @@ export function FilesTab({
 }) {
   const requestTracker = useRequestTracker();
   const [files, setFiles] = useState<AdminFileSummary[]>([]);
-  const [total, setTotal] = useState(0);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
 
-  const page = searchState?.filesPage ?? 1;
+  const cursor = searchState?.filesCursor ?? null;
   const statusFilter = searchState?.filesStatus ?? '';
   const policyFilter = searchState?.filesPolicy ?? '';
   const sortBy = searchState?.filesSortBy ?? 'uploadedAt_desc';
@@ -86,12 +87,13 @@ export function FilesTab({
           sortBy,
           uploadedWithinDays,
           minReportCount,
-          page,
+          cursor,
           signal
         ),
       onSuccess: (res) => {
         setFiles(res.files);
-        setTotal(res.total);
+        setNextCursor(res.nextCursor);
+        setHasMore(res.hasMore);
       },
       onError: (err: unknown) => {
         if (err instanceof AdminAccessError) {
@@ -105,7 +107,7 @@ export function FilesTab({
   }, [
     minReportCount,
     onAccessLost,
-    page,
+    cursor,
     policyFilter,
     requestTracker,
     sortBy,
@@ -141,13 +143,14 @@ export function FilesTab({
     }
   };
 
-  const totalPages = Math.ceil(total / FILE_PAGE_SIZE);
-
   return (
     <section className="panel">
       <div className="panel__row">
         <p className="panel__label">Files</p>
-        <span className="chip chip--outline">{formatCount(total)} total</span>
+        <span className="chip chip--outline">
+          {formatCount(files.length)}
+          {hasMore ? '+' : ''} shown
+        </span>
       </div>
 
       <fieldset className="admin-nav">
@@ -158,7 +161,7 @@ export function FilesTab({
             type="button"
             aria-pressed={statusFilter === f.value}
             className={`admin-nav__tab ${statusFilter === f.value ? 'admin-nav__tab--active' : ''}`}
-            onClick={() => onUpdateSearch?.({ filesStatus: f.value, filesPage: 1 })}
+            onClick={() => onUpdateSearch?.({ filesStatus: f.value, filesCursor: undefined })}
           >
             {f.label}
           </button>
@@ -173,7 +176,7 @@ export function FilesTab({
             type="button"
             aria-pressed={sortBy === s.value}
             className={`admin-nav__tab admin-nav__tab--sm ${sortBy === s.value ? 'admin-nav__tab--active' : ''}`}
-            onClick={() => onUpdateSearch?.({ filesSortBy: s.value, filesPage: 1 })}
+            onClick={() => onUpdateSearch?.({ filesSortBy: s.value, filesCursor: undefined })}
           >
             {s.label}
           </button>
@@ -188,7 +191,7 @@ export function FilesTab({
             type="button"
             aria-pressed={policyFilter === option.value}
             className={`admin-nav__tab admin-nav__tab--sm ${policyFilter === option.value ? 'admin-nav__tab--active' : ''}`}
-            onClick={() => onUpdateSearch?.({ filesPolicy: option.value, filesPage: 1 })}
+            onClick={() => onUpdateSearch?.({ filesPolicy: option.value, filesCursor: undefined })}
           >
             {option.label}
           </button>
@@ -206,7 +209,7 @@ export function FilesTab({
               aria-pressed={uploadedWithinDays === activeVal}
               className={`admin-nav__tab admin-nav__tab--sm ${uploadedWithinDays === activeVal ? 'admin-nav__tab--active' : ''}`}
               onClick={() =>
-                onUpdateSearch?.({ filesDays: option.value || undefined, filesPage: 1 })
+                onUpdateSearch?.({ filesDays: option.value || undefined, filesCursor: undefined })
               }
             >
               {option.label}
@@ -226,7 +229,10 @@ export function FilesTab({
               aria-pressed={minReportCount === activeVal}
               className={`admin-nav__tab admin-nav__tab--sm ${minReportCount === activeVal ? 'admin-nav__tab--active' : ''}`}
               onClick={() =>
-                onUpdateSearch?.({ filesMinReports: option.value || undefined, filesPage: 1 })
+                onUpdateSearch?.({
+                  filesMinReports: option.value || undefined,
+                  filesCursor: undefined
+                })
               }
             >
               {option.label}
@@ -306,27 +312,27 @@ export function FilesTab({
         </div>
       )}
 
-      {totalPages > 1 ? (
+      {hasMore || cursor ? (
         <div className="report-card__actions" style={{ marginTop: 14 }}>
-          <button
-            type="button"
-            className="button-link button-link--ghost button-link--sm"
-            disabled={page <= 1}
-            onClick={() => onUpdateSearch?.({ filesPage: Math.max(1, page - 1) })}
-          >
-            ← Previous
-          </button>
-          <span className="chip chip--outline">
-            Page {page} of {totalPages}
-          </span>
-          <button
-            type="button"
-            className="button-link button-link--ghost button-link--sm"
-            disabled={page >= totalPages}
-            onClick={() => onUpdateSearch?.({ filesPage: page + 1 })}
-          >
-            Next →
-          </button>
+          {cursor ? (
+            <button
+              type="button"
+              className="button-link button-link--ghost button-link--sm"
+              onClick={() => onUpdateSearch?.({ filesCursor: undefined })}
+            >
+              ← First page
+            </button>
+          ) : null}
+          {hasMore ? (
+            <button
+              type="button"
+              className="button-link button-link--ghost button-link--sm"
+              disabled={!nextCursor}
+              onClick={() => nextCursor && onUpdateSearch?.({ filesCursor: nextCursor })}
+            >
+              Next →
+            </button>
+          ) : null}
         </div>
       ) : null}
     </section>

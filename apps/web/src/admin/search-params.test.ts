@@ -42,16 +42,12 @@ describe('parseAdminSearchParams', () => {
   });
 
   describe('files tab filters', () => {
-    it('parses filesPage as a positive integer', () => {
-      expect(parseAdminSearchParams({ filesPage: '3' })).toEqual({ filesPage: 3 });
-      expect(parseAdminSearchParams({ filesPage: 5 })).toEqual({ filesPage: 5 });
+    it('parses filesCursor as a non-empty string', () => {
+      expect(parseAdminSearchParams({ filesCursor: 'abc123' })).toEqual({ filesCursor: 'abc123' });
     });
 
-    it('discards invalid filesPage values', () => {
-      expect(parseAdminSearchParams({ filesPage: '0' })).toEqual({});
-      expect(parseAdminSearchParams({ filesPage: '-1' })).toEqual({});
-      expect(parseAdminSearchParams({ filesPage: '1.5' })).toEqual({});
-      expect(parseAdminSearchParams({ filesPage: 'abc' })).toEqual({});
+    it('discards empty filesCursor', () => {
+      expect(parseAdminSearchParams({ filesCursor: '' })).toEqual({});
     });
 
     it('accepts valid filesStatus values', () => {
@@ -115,13 +111,14 @@ describe('parseAdminSearchParams', () => {
   });
 
   describe('reports tab filters', () => {
-    it('parses reportsPage as a positive integer', () => {
-      expect(parseAdminSearchParams({ reportsPage: '2' })).toEqual({ reportsPage: 2 });
+    it('parses reportsCursor as a non-empty string', () => {
+      expect(parseAdminSearchParams({ reportsCursor: 'xyz789' })).toEqual({
+        reportsCursor: 'xyz789'
+      });
     });
 
-    it('discards invalid reportsPage values', () => {
-      expect(parseAdminSearchParams({ reportsPage: '0' })).toEqual({});
-      expect(parseAdminSearchParams({ reportsPage: 'bad' })).toEqual({});
+    it('discards empty reportsCursor', () => {
+      expect(parseAdminSearchParams({ reportsCursor: '' })).toEqual({});
     });
 
     it('accepts valid reportsStatus values', () => {
@@ -195,32 +192,32 @@ describe('parseAdminSearchParams', () => {
 
   describe('parsePositiveInt behavior (via field parsing)', () => {
     it('accepts numeric strings for page fields', () => {
-      expect(parseAdminSearchParams({ filesPage: '10' })).toEqual({ filesPage: 10 });
+      expect(parseAdminSearchParams({ storagePage: '10' })).toEqual({ storagePage: 10 });
     });
 
     it('accepts number values for page fields', () => {
-      expect(parseAdminSearchParams({ filesPage: 10 })).toEqual({ filesPage: 10 });
+      expect(parseAdminSearchParams({ storagePage: 10 })).toEqual({ storagePage: 10 });
     });
 
     it('rejects zero', () => {
-      expect(parseAdminSearchParams({ filesPage: 0 })).toEqual({});
+      expect(parseAdminSearchParams({ storagePage: 0 })).toEqual({});
     });
 
     it('rejects negative numbers', () => {
-      expect(parseAdminSearchParams({ filesPage: -3 })).toEqual({});
+      expect(parseAdminSearchParams({ storagePage: -3 })).toEqual({});
     });
 
     it('rejects non-integer decimals', () => {
-      expect(parseAdminSearchParams({ filesPage: 2.5 })).toEqual({});
+      expect(parseAdminSearchParams({ storagePage: 2.5 })).toEqual({});
     });
 
     it('rejects non-numeric strings', () => {
-      expect(parseAdminSearchParams({ filesPage: 'page1' })).toEqual({});
+      expect(parseAdminSearchParams({ storagePage: 'page1' })).toEqual({});
     });
 
     it('rejects null and boolean', () => {
-      expect(parseAdminSearchParams({ filesPage: null })).toEqual({});
-      expect(parseAdminSearchParams({ filesPage: true })).toEqual({});
+      expect(parseAdminSearchParams({ storagePage: null })).toEqual({});
+      expect(parseAdminSearchParams({ storagePage: true })).toEqual({});
     });
   });
 });

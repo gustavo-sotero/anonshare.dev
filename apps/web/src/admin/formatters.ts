@@ -5,6 +5,9 @@ import type {
   OperationalAnomalySummary,
   QueueHealthSnapshot
 } from '@anonshare/contracts';
+import { formatBytes } from '~/utils/format';
+
+export { formatBytes };
 
 // ─── Date/Time ───────────────────────────────────────────────────────────────
 
@@ -40,18 +43,6 @@ export function formatPercent(value: number): string {
 
 export function formatCount(value: number): string {
   return new Intl.NumberFormat().format(value);
-}
-
-export function formatBytes(value: number): string {
-  if (value < 1024) return `${formatCount(value)} B`;
-  const units = ['KB', 'MB', 'GB', 'TB'];
-  let size = value;
-  let unitIndex = -1;
-  do {
-    size /= 1024;
-    unitIndex += 1;
-  } while (size >= 1024 && unitIndex < units.length - 1);
-  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: size >= 100 ? 0 : 1 }).format(size)} ${units[unitIndex]}`;
 }
 
 // ─── Domain labels ───────────────────────────────────────────────────────────

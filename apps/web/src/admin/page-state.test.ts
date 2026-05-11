@@ -43,7 +43,8 @@ describe('getAdminSurfaceMessage', () => {
           dismissedReportsByDay: [],
           rateLimitBlockedByDay: []
         },
-        queueHealth: []
+        queueHealth: [],
+        systemSettings: { degraded: false, details: [] }
       },
       overview: {
         totalFiles: 0,
@@ -53,7 +54,6 @@ describe('getAdminSurfaceMessage', () => {
       },
       anomalies: [],
       reports: [],
-      reportsTotal: 0,
       refreshedAt: '2030-01-01T00:00:00.000Z'
     };
 

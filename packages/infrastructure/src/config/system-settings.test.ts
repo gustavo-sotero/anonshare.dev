@@ -1,9 +1,10 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
 import {
   getSystemSettingDefault,
   loadSystemSettingOrDefault,
   parseSystemSettingValue,
   parseSystemSettingValueByKey,
+  readSystemSetting,
   resolveSystemSetting,
   SYSTEM_SETTING_DEFAULTS,
   SYSTEM_SETTING_DEFINITIONS
@@ -116,5 +117,140 @@ describe('loadSystemSettingOrDefault', () => {
     } as unknown as Parameters<typeof loadSystemSettingOrDefault>[0];
 
     await expect(loadSystemSettingOrDefault(db, 'reportAutoHideThreshold')).resolves.toBe(3);
+  });
+
+  test('emits a structured warning with reason=missing when the row is absent', async () => {
+    const db = {
+      query: {
+        systemSettings: { findFirst: async () => null }
+      }
+    } as unknown as Parameters<typeof loadSystemSettingOrDefault>[0];
+    const warnFn = mock(() => {});
+    const log = { warn: warnFn };
+
+    await loadSystemSettingOrDefault(db, 'uploadRateLimitPerHour', log);
+
+    expect(warnFn).toHaveBeenCalledTimes(1);
+    const [, ctx] = warnFn.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(ctx.event).toBe('system_settings.fallback');
+    expect(ctx.key).toBe('upload_rate_limit_per_hour');
+    expect(ctx.reason).toBe('missing');
+  });
+
+  test('emits a structured warning with reason=invalid_value when the stored value is bad', async () => {
+    const db = {
+      query: {
+        systemSettings: {
+          findFirst: async () => ({ key: 'report_rate_limit_per_hour', value: 'bad' })
+        }
+      }
+    } as unknown as Parameters<typeof loadSystemSettingOrDefault>[0];
+    const warnFn = mock(() => {});
+
+    await loadSystemSettingOrDefault(db, 'reportRateLimitPerHour', { warn: warnFn });
+
+    const [, ctx] = warnFn.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(ctx.reason).toBe('invalid_value');
+    expect(ctx.key).toBe('report_rate_limit_per_hour');
+  });
+
+  test('emits a structured warning with reason=db_error when the query throws', async () => {
+    const db = {
+      query: {
+        systemSettings: {
+          findFirst: async () => {
+            throw new Error('connection reset');
+          }
+        }
+      }
+    } as unknown as Parameters<typeof loadSystemSettingOrDefault>[0];
+    const warnFn = mock(() => {});
+
+    await loadSystemSettingOrDefault(db, 'reportAutoHideThreshold', { warn: warnFn });
+
+    const [, ctx] = warnFn.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(ctx.reason).toBe('db_error');
+    expect(typeof ctx.detail).toBe('string');
+  });
+
+  test('emits no warning when the value is read successfully', async () => {
+    const db = {
+      query: {
+        systemSettings: {
+          findFirst: async () => ({ key: 'upload_rate_limit_per_hour', value: '30' })
+        }
+      }
+    } as unknown as Parameters<typeof loadSystemSettingOrDefault>[0];
+    const warnFn = mock(() => {});
+
+    await loadSystemSettingOrDefault(db, 'uploadRateLimitPerHour', { warn: warnFn });
+
+    expect(warnFn).not.toHaveBeenCalled();
+  });
+});
+
+describe('readSystemSetting', () => {
+  test('returns degraded=false when the value is successfully read and parsed', async () => {
+    const db = {
+      query: {
+        systemSettings: {
+          findFirst: async () => ({ key: 'upload_rate_limit_per_hour', value: '25' })
+        }
+      }
+    } as unknown as Parameters<typeof readSystemSetting>[0];
+
+    const result = await readSystemSetting(db, 'uploadRateLimitPerHour');
+    expect(result.degraded).toBe(false);
+    expect(result.value).toBe(25);
+  });
+
+  test('returns degraded=true with reason=missing when the row is absent', async () => {
+    const db = {
+      query: { systemSettings: { findFirst: async () => null } }
+    } as unknown as Parameters<typeof readSystemSetting>[0];
+
+    const result = await readSystemSetting(db, 'reportRateLimitPerHour');
+    expect(result.degraded).toBe(true);
+    if (result.degraded) {
+      expect(result.reason).toBe('missing');
+      expect(result.value).toBe(10);
+    }
+  });
+
+  test('returns degraded=true with reason=invalid_value when the stored value cannot be parsed', async () => {
+    const db = {
+      query: {
+        systemSettings: {
+          findFirst: async () => ({ key: 'download_rate_limit_per_minute', value: 'not-a-number' })
+        }
+      }
+    } as unknown as Parameters<typeof readSystemSetting>[0];
+
+    const result = await readSystemSetting(db, 'downloadRateLimitPerMinute');
+    expect(result.degraded).toBe(true);
+    if (result.degraded) {
+      expect(result.reason).toBe('invalid_value');
+      expect(result.value).toBe(30);
+    }
+  });
+
+  test('returns degraded=true with reason=db_error when the query throws', async () => {
+    const db = {
+      query: {
+        systemSettings: {
+          findFirst: async () => {
+            throw new Error('timeout');
+          }
+        }
+      }
+    } as unknown as Parameters<typeof readSystemSetting>[0];
+
+    const result = await readSystemSetting(db, 'reportAutoHideThreshold');
+    expect(result.degraded).toBe(true);
+    if (result.degraded) {
+      expect(result.reason).toBe('db_error');
+      expect(typeof result.detail).toBe('string');
+      expect(result.value).toBe(3);
+    }
   });
 });

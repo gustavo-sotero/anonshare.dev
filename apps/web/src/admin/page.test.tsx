@@ -50,7 +50,8 @@ function makeReadyState(): DashboardState {
         dismissedReportsByDay: [],
         rateLimitBlockedByDay: []
       },
-      queueHealth: []
+      queueHealth: [],
+      systemSettings: { degraded: false, details: [] }
     },
     overview: {
       totalFiles: 4,
@@ -83,7 +84,6 @@ function makeReadyState(): DashboardState {
         createdAt: '2030-01-01T00:00:00.000Z'
       }
     ],
-    reportsTotal: 2,
     refreshedAt: '2030-01-01T00:00:00.000Z'
   };
 }

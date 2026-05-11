@@ -1,6 +1,6 @@
 import { adminReportListQuerySchema, resolveReportSchema } from '@anonshare/contracts';
 import { reports } from '@anonshare/infrastructure/db/schema';
-import { and, count, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt, or } from 'drizzle-orm';
 import type { Hono } from 'hono';
 import { logger } from '../../logger';
 import { getRequestId } from '../support';
@@ -20,7 +20,7 @@ export function registerAdminReportRoutes(router: Hono, resolvedDeps: ResolvedAd
       fileId: c.req.query('fileId'),
       reason: c.req.query('reason'),
       urgency: c.req.query('urgency'),
-      page: c.req.query('page'),
+      cursor: c.req.query('cursor'),
       pageSize: c.req.query('pageSize')
     });
 
@@ -31,8 +31,7 @@ export function registerAdminReportRoutes(router: Hono, resolvedDeps: ResolvedAd
       );
     }
 
-    const { status, fileId, reason, urgency, page, pageSize } = queryParsed.data;
-    const offset = (page - 1) * pageSize;
+    const { status, fileId, reason, urgency, cursor, pageSize } = queryParsed.data;
 
     try {
       const db = resolvedDeps.getDb();
@@ -53,20 +52,48 @@ export function registerAdminReportRoutes(router: Hono, resolvedDeps: ResolvedAd
         where = where ? and(where, urgencyCondition) : urgencyCondition;
       }
 
-      const [rows, [totalRow]] = await Promise.all([
-        db
-          .select()
-          .from(reports)
-          .where(where)
-          .orderBy(desc(reports.createdAt))
-          .limit(pageSize)
-          .offset(offset),
-        db.select({ total: count() }).from(reports).where(where)
-      ]);
+      // Decode and apply cursor for keyset pagination (reports sorted by createdAt DESC).
+      if (cursor) {
+        try {
+          const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf-8')) as {
+            s: unknown;
+            i: unknown;
+          };
+          if (typeof decoded.s === 'string' && typeof decoded.i === 'string') {
+            const cursorDate = new Date(decoded.s);
+            const cursorCondition = or(
+              lt(reports.createdAt, cursorDate),
+              and(eq(reports.createdAt, cursorDate), lt(reports.id, decoded.i))
+            );
+            where = where ? and(where, cursorCondition) : cursorCondition;
+          }
+        } catch {
+          // Malformed cursor — ignore and return first page.
+        }
+      }
+
+      // Fetch one extra row to determine whether a next page exists.
+      const rows = await db
+        .select()
+        .from(reports)
+        .where(where)
+        .orderBy(desc(reports.createdAt))
+        .limit(pageSize + 1);
+
+      const hasMore = rows.length > pageSize;
+      const pageRows = hasMore ? rows.slice(0, pageSize) : rows;
+      const lastRow = pageRows[pageRows.length - 1];
+
+      let nextCursor: string | null = null;
+      if (hasMore && lastRow) {
+        nextCursor = Buffer.from(
+          JSON.stringify({ s: lastRow.createdAt.toISOString(), i: lastRow.id })
+        ).toString('base64url');
+      }
 
       return c.json(
         {
-          reports: rows.map((r) => ({
+          reports: pageRows.map((r) => ({
             id: r.id,
             fileId: r.fileId,
             reason: r.reason,
@@ -77,9 +104,8 @@ export function registerAdminReportRoutes(router: Hono, resolvedDeps: ResolvedAd
             resolvedAt: r.resolvedAt?.toISOString() ?? null,
             createdAt: r.createdAt.toISOString()
           })),
-          total: totalRow?.total ?? 0,
-          page,
-          pageSize
+          nextCursor,
+          hasMore
         },
         200
       );

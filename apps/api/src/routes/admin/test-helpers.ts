@@ -170,6 +170,12 @@ export type AdminDbOpts = {
   capturedTxInserts?: unknown[];
   capturedTxUpdates?: unknown[];
   capturedUpdates?: unknown[];
+  /**
+   * When true, db.query.systemSettings.findFirst resolves with a valid row value
+   * so that readSystemSetting returns non-degraded results.
+   * When false or omitted, findFirst throws, causing readSystemSetting to degrade with reason 'db_error'.
+   */
+  systemSettingsAvailable?: boolean;
 };
 
 export function makeAdminDb(opts: AdminDbOpts = {}): ReturnType<typeof createDb> {
@@ -202,6 +208,14 @@ export function makeAdminDb(opts: AdminDbOpts = {}): ReturnType<typeof createDb>
       },
       reports: {
         findFirst: async () => opts.reportLookup ?? null
+      },
+      systemSettings: {
+        findFirst: async () => {
+          if (!opts.systemSettingsAvailable) {
+            throw new Error('systemSettings not configured in test');
+          }
+          return { key: 'mock', value: '5' };
+        }
       }
     },
     select: (_cols?: unknown) => ({

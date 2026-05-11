@@ -1,3 +1,4 @@
+import { readSystemSetting, SYSTEM_SETTING_DEFINITIONS } from '@anonshare/infrastructure/config';
 import type { Hono } from 'hono';
 import { logger } from '../../logger';
 import { getRequestId } from '../support';
@@ -55,6 +56,31 @@ export function registerAdminStatsRoutes(router: Hono, resolvedDeps: ResolvedAdm
           })
       ]);
 
+      // ── System settings degradation check ───────────────────────────────────
+      // Read all settings and surface any fallback reasons to the dashboard so
+      // operators see degraded mode rather than relying on logs alone.
+      const db = resolvedDeps.getDb();
+      const settingNames = Object.keys(SYSTEM_SETTING_DEFINITIONS) as Array<
+        keyof typeof SYSTEM_SETTING_DEFINITIONS
+      >;
+      const settingResults = await Promise.all(
+        settingNames.map(async (name) => ({
+          name: String(name),
+          key: SYSTEM_SETTING_DEFINITIONS[name].key,
+          result: await readSystemSetting(db, name)
+        }))
+      );
+      const degradedEntries = settingResults.filter((s) => s.result.degraded);
+      const systemSettings = {
+        degraded: degradedEntries.length > 0,
+        details: degradedEntries.map((s) => ({
+          name: s.name,
+          key: s.key,
+          reason: (s.result as { degraded: true; reason: 'missing' | 'invalid_value' | 'db_error' })
+            .reason
+        }))
+      };
+
       const openAnomaliesByType = Object.fromEntries(
         anomalyCounts.map((row) => [row.type, row.count])
       );
@@ -107,7 +133,8 @@ export function registerAdminStatsRoutes(router: Hono, resolvedDeps: ResolvedAdm
           openAnomaliesByType,
           reportTotals,
           abuseMetrics,
-          queueHealth
+          queueHealth,
+          systemSettings
         },
         200
       );

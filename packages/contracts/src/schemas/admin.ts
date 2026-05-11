@@ -139,12 +139,28 @@ export const adminAbuseMetricsSchema = z.object({
   rateLimitBlockedByDay: z.array(adminDailyCountSchema)
 });
 
+export const systemSettingDegradedEntrySchema = z.object({
+  name: z.string().min(1),
+  key: z.string().min(1),
+  reason: z.enum(['missing', 'invalid_value', 'db_error'])
+});
+
+export type SystemSettingDegradedEntry = z.infer<typeof systemSettingDegradedEntrySchema>;
+
+export const systemSettingsHealthSchema = z.object({
+  degraded: z.boolean(),
+  details: z.array(systemSettingDegradedEntrySchema)
+});
+
+export type SystemSettingsHealth = z.infer<typeof systemSettingsHealthSchema>;
+
 export const adminLifecycleStatsResponseSchema = z.object({
   openAnomaliesTotal: z.int().min(0),
   openAnomaliesByType: z.record(z.string(), z.int().min(0)),
   reportTotals: adminReportTotalsSchema,
   abuseMetrics: adminAbuseMetricsSchema,
-  queueHealth: z.array(queueHealthSnapshotSchema)
+  queueHealth: z.array(queueHealthSnapshotSchema),
+  systemSettings: systemSettingsHealthSchema
 });
 
 export type AdminLifecycleStatsResponse = z.infer<typeof adminLifecycleStatsResponseSchema>;
@@ -178,9 +194,8 @@ export type AdminFileSummary = z.infer<typeof adminFileSummarySchema>;
 
 export const adminFileListResponseSchema = z.object({
   files: z.array(adminFileSummarySchema),
-  total: z.int().min(0),
-  page: z.int().min(1),
-  pageSize: z.int().min(1)
+  nextCursor: z.string().nullable(),
+  hasMore: z.boolean()
 });
 
 export type AdminFileListResponse = z.infer<typeof adminFileListResponseSchema>;
@@ -232,7 +247,7 @@ export const adminFileListQuerySchema = z.object({
   sortBy: z.enum(ADMIN_FILE_SORT_VALUES).optional().default('uploadedAt_desc'),
   uploadedWithinDays: z.coerce.number().int().min(1).max(365).optional(),
   minReportCount: z.coerce.number().int().min(0).max(10_000).optional(),
-  page: z.coerce.number().int().min(1).default(1),
+  cursor: z.string().optional(),
   pageSize: z.coerce.number().int().min(1).max(100).default(50)
 });
 
@@ -248,9 +263,8 @@ export type ModerationResult = z.infer<typeof moderationResultSchema>;
 
 export const adminReportListResponseSchema = z.object({
   reports: z.array(adminReportSummarySchema),
-  total: z.int().min(0),
-  page: z.int().min(1),
-  pageSize: z.int().min(1)
+  nextCursor: z.string().nullable(),
+  hasMore: z.boolean()
 });
 
 export type AdminReportListResponse = z.infer<typeof adminReportListResponseSchema>;
@@ -260,7 +274,7 @@ export const adminReportListQuerySchema = z.object({
   fileId: z.uuid().optional(),
   reason: z.enum(REPORT_REASON_VALUES).optional(),
   urgency: z.enum(ADMIN_REPORT_URGENCY_VALUES).optional(),
-  page: z.coerce.number().int().min(1).default(1),
+  cursor: z.string().optional(),
   pageSize: z.coerce.number().int().min(1).max(100).default(50)
 });
 
