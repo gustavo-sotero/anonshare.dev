@@ -1,7 +1,11 @@
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import { AdminAccessError, getAdminAccessErrorMessage } from '~/admin/access';
-import { AdminDashboardNav } from '~/admin/dashboard-nav';
+import {
+  AdminDashboardNav,
+  getAdminDashboardTabId,
+  getAdminDashboardTabPanelId
+} from '~/admin/dashboard-nav';
 import { ADMIN_LOGOUT_WARNING_MESSAGE, getAdminSurfaceMessage } from '~/admin/page-state';
 import { runTrackedRequest, useRequestTracker } from '~/admin/request-tracker';
 import type { AdminRouteLoaderData } from '~/admin/route-state';
@@ -144,6 +148,8 @@ export function AdminPage({
   });
   const pendingReportsCount = state.kind === 'ready' ? state.reportsTotal : 0;
   const anomalyCount = state.kind === 'ready' ? state.anomalies.length : 0;
+  const activeTabId = getAdminDashboardTabId(activeTab);
+  const activeTabPanelId = getAdminDashboardTabPanelId(activeTab);
 
   if (state.kind === 'loading') {
     return (
@@ -248,44 +254,46 @@ export function AdminPage({
               />
             ) : null}
 
-            {activeTab === 'overview' && <OverviewTab data={state} />}
-            {activeTab === 'files' && (
-              <FilesTab
-                searchState={searchState}
-                onUpdateSearch={onUpdateSearch}
-                onInspect={(id) => onNavigate?.(activeTab, id)}
-                onModerate={moderateFile}
-                onAccessLost={handleAccessLost}
-              />
-            )}
-            {activeTab === 'reports' && (
-              <ReportsTab
-                searchState={searchState}
-                onUpdateSearch={onUpdateSearch}
-                onInspect={(id) => onNavigate?.(activeTab, id)}
-                onModerateFile={moderateFile}
-                onAccessLost={handleAccessLost}
-              />
-            )}
-            {activeTab === 'downloads' && (
-              <DownloadsTab
-                searchState={searchState}
-                onUpdateSearch={onUpdateSearch}
-                onInspect={(id) => onNavigate?.(activeTab, id)}
-                onAccessLost={handleAccessLost}
-              />
-            )}
-            {activeTab === 'storage' && (
-              <StorageTab
-                data={state}
-                searchState={searchState}
-                onUpdateSearch={onUpdateSearch}
-                onInspect={(id) => onNavigate?.(activeTab, id)}
-                onAccessLost={handleAccessLost}
-              />
-            )}
-            {activeTab === 'queues' && <QueuesTab data={state} />}
-            {activeTab === 'anomalies' && <AnomaliesTab data={state} />}
+            <section id={activeTabPanelId} role="tabpanel" aria-labelledby={activeTabId}>
+              {activeTab === 'overview' && <OverviewTab data={state} />}
+              {activeTab === 'files' && (
+                <FilesTab
+                  searchState={searchState}
+                  onUpdateSearch={onUpdateSearch}
+                  onInspect={(id) => onNavigate?.(activeTab, id)}
+                  onModerate={moderateFile}
+                  onAccessLost={handleAccessLost}
+                />
+              )}
+              {activeTab === 'reports' && (
+                <ReportsTab
+                  searchState={searchState}
+                  onUpdateSearch={onUpdateSearch}
+                  onInspect={(id) => onNavigate?.(activeTab, id)}
+                  onModerateFile={moderateFile}
+                  onAccessLost={handleAccessLost}
+                />
+              )}
+              {activeTab === 'downloads' && (
+                <DownloadsTab
+                  searchState={searchState}
+                  onUpdateSearch={onUpdateSearch}
+                  onInspect={(id) => onNavigate?.(activeTab, id)}
+                  onAccessLost={handleAccessLost}
+                />
+              )}
+              {activeTab === 'storage' && (
+                <StorageTab
+                  data={state}
+                  searchState={searchState}
+                  onUpdateSearch={onUpdateSearch}
+                  onInspect={(id) => onNavigate?.(activeTab, id)}
+                  onAccessLost={handleAccessLost}
+                />
+              )}
+              {activeTab === 'queues' && <QueuesTab data={state} />}
+              {activeTab === 'anomalies' && <AnomaliesTab data={state} />}
+            </section>
           </main>
         </div>
       </div>

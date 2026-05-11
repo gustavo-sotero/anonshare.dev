@@ -9,6 +9,7 @@ import {
 } from '@tanstack/react-router';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { AdminPage } from './page';
+import type { DashboardState } from './transport';
 
 async function renderAdminPage(props: Parameters<typeof AdminPage>[0]) {
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
@@ -23,6 +24,68 @@ async function renderAdminPage(props: Parameters<typeof AdminPage>[0]) {
   });
   await router.load();
   return renderToStaticMarkup(<RouterProvider router={router} />);
+}
+
+function makeReadyState(): DashboardState {
+  return {
+    kind: 'ready',
+    session: {
+      id: '00000000-0000-4000-8000-000000000001',
+      githubId: '123',
+      githubLogin: 'admin-user',
+      expiresAt: '2030-01-01T00:00:00.000Z'
+    },
+    stats: {
+      openAnomaliesTotal: 1,
+      openAnomaliesByType: { orphaned_object: 1 },
+      reportTotals: {
+        total: 2,
+        byStatus: { pending: 2, resolved: 0, dismissed: 0 }
+      },
+      abuseMetrics: {
+        windowDays: 14,
+        reportsByDay: [],
+        autoHiddenByDay: [],
+        resolvedReportsByDay: [],
+        dismissedReportsByDay: [],
+        rateLimitBlockedByDay: []
+      },
+      queueHealth: []
+    },
+    overview: {
+      totalFiles: 4,
+      byStatus: { active: 2, hidden: 1, expired: 1 },
+      totalStorageBytes: 4096,
+      totalDownloads: 7
+    },
+    anomalies: [
+      {
+        id: '00000000-0000-4000-8000-000000000002',
+        type: 'orphaned_object',
+        severity: 'medium',
+        fileId: null,
+        details: null,
+        detectedAt: '2030-01-01T00:00:00.000Z',
+        resolvedAt: null,
+        resolution: null
+      }
+    ],
+    reports: [
+      {
+        id: '00000000-0000-4000-8000-000000000003',
+        fileId: '00000000-0000-4000-8000-000000000004',
+        reason: 'spam',
+        urgency: 'medium',
+        message: null,
+        status: 'pending',
+        resolvedBy: null,
+        resolvedAt: null,
+        createdAt: '2030-01-01T00:00:00.000Z'
+      }
+    ],
+    reportsTotal: 2,
+    refreshedAt: '2030-01-01T00:00:00.000Z'
+  };
 }
 
 describe('AdminPage SSR', () => {
@@ -44,5 +107,25 @@ describe('AdminPage SSR', () => {
     );
     expect(html).toContain('anonshare — anonymous file sharing. no accounts. no trace.');
     expect(html).not.toContain('Share a file');
+  });
+
+  it('links the active dashboard tab to a labelled tabpanel', async () => {
+    const html = await renderAdminPage({
+      loaderData: {
+        initialState: makeReadyState(),
+        loginError: null
+      },
+      activeTab: 'overview'
+    });
+
+    expect(html).toContain('role="tablist"');
+    expect(html).toContain('aria-orientation="vertical"');
+    expect(html).toContain('id="admin-tab-overview"');
+    expect(html).toContain('aria-controls="admin-tabpanel-overview"');
+    expect(html).toContain('aria-selected="true"');
+    expect(html).toContain('tabindex="0"');
+    expect(html).toContain('id="admin-tabpanel-overview"');
+    expect(html).toContain('role="tabpanel"');
+    expect(html).toContain('aria-labelledby="admin-tab-overview"');
   });
 });
