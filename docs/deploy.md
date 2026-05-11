@@ -229,5 +229,5 @@ The reconciler logs `reconciliation.anomaly_detected` events with `type` and `fi
 - No password-protected shares, E2E encryption, or malware scanning.
 - Preview is restricted to images, video, audio, PDF, and plain text. Other MIME types show download only.
 - Large file uploads (near 256 MB) may require reverse proxy body size configuration (`client_max_body_size` in nginx, etc.).
-- Rate limits are Redis-backed. If Redis is unavailable and degraded mode is active, rate limiting may be bypassed temporarily.
+- Rate limits are Redis-backed. If Redis is unavailable and degraded mode is active, the API falls back to a per-process in-memory fixed-window counter. In a multi-replica deployment the in-memory fallback is not shared across instances, so the effective rate limit is multiplied by the replica count during an outage. The fallback is intentionally conservative and is strictly for short outages; restore Redis as quickly as possible.
 - Job deduplication depends on BullMQ job IDs. If Redis is wiped, duplicate jobs may run during the next reconcile sweep.

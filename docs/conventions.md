@@ -89,6 +89,25 @@ When splitting a large test file into per-route or per-pass test files, place al
 
 For TanStack Router routes, prefer route-level `validateSearch` and loaders for typed search parsing and initial data bootstrap. Avoid mount-only Effects whose only purpose is to interpret URL search params or perform the first request that the router can own directly.
 
+## Share Page Route Pattern
+
+The public share route (`routes/share.$token.tsx`) uses a thin route shell plus a token-keyed child component to guarantee full React state reset when the token changes:
+
+```tsx
+function SharePage() {
+  const { token } = Route.useParams();
+  return <SharePageContent key={token} />;
+}
+
+function SharePageContent() {
+  // all token-scoped state initialises fresh on every mount
+}
+```
+
+This follows the React guidance on [Preserving and Resetting State](https://react.dev/learn/preserving-and-resetting-state): changing the `key` remounts the component and resets all state without an effect-based cleanup pass.
+
+The route keeps a dedicated `apps/web/src/share/transport.ts` module that validates all API responses against the shared schemas in `@anonshare/contracts` before handing them to the component. The pattern mirrors the admin transport module and makes the API boundary explicit. All async operations inside the content component (download, preview, availability refresh, report submission) accept and propagate an `AbortSignal` to avoid stale updates when the user navigates away or the component unmounts.
+
 ## Admin URL State
 
 The admin dashboard drives all tab navigation, file inspection, and tab-level filter/pagination state through URL search parameters owned by the TanStack Router `validateSearch` function in `routes/admin.tsx`.

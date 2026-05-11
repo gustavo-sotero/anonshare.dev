@@ -63,6 +63,26 @@ All admin tab navigation and tab-level filter/pagination state lives in URL sear
 - `loaderDeps` only includes navigation keys (`error`) that should actually trigger a data reload. Filter/pagination keys are excluded because filters are applied client-side against the dashboard snapshot without re-fetching.
 - Tab components receive `searchState` and `onUpdateSearch` as optional props forwarded from the route. They derive filter/page values from `searchState` (with sensible defaults) and call `onUpdateSearch` on user interaction instead of managing local state.
 
+## Rate Limiting and Degraded Mode
+
+Rate limiting is centralised in `@anonshare/infrastructure/rate-limit` through the `applyRateLimit()` function. It is the single entry point for upload, download, and report limits.
+
+- **Primary path**: fixed-window counter in Redis (atomic `INCR` / `EXPIRE`). The result includes `origin: 'redis'`.
+- **Degraded path**: when Redis throws any error, `applyRateLimit` falls back automatically to a process-local fixed-window store backed by a `Map`. The result includes `origin: 'memory-fallback'` and a `rate_limit.degraded` warning is logged.
+
+**Important multi-instance caveat**: the in-memory fallback is not shared across process instances. If the API runs in more than one replica, each replica maintains its own degraded counter. A client that spreads requests across replicas may see a higher effective limit than the configured value during a Redis outage. The fallback is intentionally conservative (same thresholds) and is strictly an emergency degraded mode, not a replacement for Redis.
+
+Route handlers must not try/catch rate-limit calls directly. Use `applyRateLimit()` unconditionally and act on the returned `limited` flag.
+
+## Admin Authentication and Cookie Signing
+
+Admin authentication uses GitHub OAuth with a strict single-identity allowlist (`GITHUB_ALLOWED_USER_ID` must be a numeric GitHub user ID). After successful OAuth, the server creates a DB-backed session record and issues a signed cookie.
+
+- Cookies are signed with `SESSION_SECRET` via Hono's `setSignedCookie` / `getSignedCookie` helpers. A tampered or unsigned cookie is rejected before the session DB lookup.
+- Session records live in the `admin_sessions` table and are invalidated on explicit logout or DB-level expiry.
+- Rotating `SESSION_SECRET` immediately invalidates all active admin sessions because every cookie verification will fail.
+- The canonical cookie name is `ADMIN_SESSION_COOKIE_NAME` in `apps/api/src/routes/admin/types.ts`. Auth and admin routes must import that constant rather than duplicating the string.
+
 ## Configuration policy
 
 - A single root `.env` file is the source of truth for all process runtime configuration.
