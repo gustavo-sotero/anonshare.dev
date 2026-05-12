@@ -29,7 +29,8 @@
     "verify:bullmq": "bun packages/infrastructure/src/scripts/check-bullmq-version.ts",
     "verify:migrations": "bun run db:generate && git diff --exit-code -- packages/infrastructure/src/db/migrations && bun run db:migrate",
     "verify": "bun run verify:repo && bun run verify:deps && bun run verify:bullmq && bun run typecheck && bun run lint && bun run test && bun run build && bun run verify:migrations",
-    "e2e": "playwright test",
+    "browser-test": "playwright test",
+    "e2e": "bun run browser-test",
     "e2e:ui": "playwright test --ui"
   },
   "overrides": {

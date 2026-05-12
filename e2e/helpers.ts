@@ -6,6 +6,7 @@
  */
 export const API_URL = process.env.APP_API_URL ?? 'http://localhost:3001';
 export const BASE_URL = process.env.APP_BASE_URL ?? 'http://localhost:3000';
+export const ADMIN_STORAGE_STATE_PATH = 'playwright/.auth/admin.json';
 
 /**
  * Bootstrap an admin session via the test-only internal endpoint.
@@ -42,13 +43,15 @@ export async function uploadFile(options: {
   oneTimeDownload?: boolean;
   expiresInMinutes?: number;
   allowPreview?: boolean;
+  forwardedFor?: string;
 }): Promise<{ shareToken: string; shareUrl: string; expiresAt: string }> {
   const {
     filename,
     content,
     mimeType = 'text/plain',
     oneTimeDownload = false,
-    allowPreview = false
+    allowPreview = false,
+    forwardedFor
   } = options;
 
   const form = new FormData();
@@ -64,6 +67,7 @@ export async function uploadFile(options: {
 
   const response = await fetch(`${API_URL}/upload`, {
     method: 'POST',
+    headers: forwardedFor ? { 'x-forwarded-for': forwardedFor } : undefined,
     body: form
   });
 
@@ -79,4 +83,28 @@ export async function uploadFile(options: {
   };
 
   return data;
+}
+
+export async function submitShareReport(options: {
+  shareToken: string;
+  reason: 'illegal_content' | 'copyright_violation' | 'malware' | 'spam' | 'other';
+  message?: string;
+  forwardedFor?: string;
+}): Promise<void> {
+  const response = await fetch(`${API_URL}/report/${options.shareToken}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(options.forwardedFor ? { 'x-forwarded-for': options.forwardedFor } : {})
+    },
+    body: JSON.stringify({
+      reason: options.reason,
+      ...(options.message ? { message: options.message } : {})
+    })
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`Report failed: HTTP ${response.status} — ${body}`);
+  }
 }

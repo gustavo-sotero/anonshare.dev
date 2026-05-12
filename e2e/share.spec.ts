@@ -37,6 +37,28 @@ test('upload → share → download happy path', async ({ page }) => {
 });
 
 /**
+ * Preview-enabled files expose an inline preview without suppressing download.
+ */
+test('preview-enabled share shows preview and download actions together', async ({ page }) => {
+  const { shareUrl } = await uploadFile({
+    filename: 'previewable.txt',
+    content: 'Preview me in the browser',
+    allowPreview: true
+  });
+
+  await page.goto(shareUrl);
+
+  await expect(page.getByText('previewable.txt', { exact: false })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Load preview' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Download file' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Load preview' }).click();
+
+  await expect(page.getByText('Preview me in the browser')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole('button', { name: 'Download file' })).toBeVisible();
+});
+
+/**
  * One-time download: file is consumed after the first download and the share
  * page shows an unavailable state on subsequent visits.
  */
@@ -83,4 +105,31 @@ test('expired share link shows unavailable state', async ({ page }) => {
       '[data-testid="unavailable"], :text("no longer available"), :text("expired"), :text("not available")'
     )
   ).toBeVisible({ timeout: 10_000 });
+});
+
+/**
+ * Repeated public reports should auto-hide the file once the threshold is met.
+ */
+test('report submissions auto-hide a file after the threshold is reached', async ({ page }) => {
+  const { shareUrl } = await uploadFile({
+    filename: 'report-target.txt',
+    content: 'This file will be auto-hidden after reports'
+  });
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await page.goto(shareUrl);
+
+    await page.getByRole('button', { name: 'report it' }).click();
+    await page.getByLabel('Reason').selectOption('spam');
+    await page.getByLabel('Additional context (optional)').fill(`report attempt ${attempt}`);
+    await page.getByRole('button', { name: 'Submit report' }).click();
+
+    if (attempt < 3) {
+      await expect(page.getByText('Your report has been received.')).toBeVisible({
+        timeout: 10_000
+      });
+    }
+  }
+
+  await expect(page.getByText('This file is not available.')).toBeVisible({ timeout: 10_000 });
 });

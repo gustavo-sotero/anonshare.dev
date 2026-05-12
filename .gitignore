@@ -13,3 +13,4 @@ build/
 Thumbs.db
 coverage/
 .nyc_output/
+playwright/.auth/

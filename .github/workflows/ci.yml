@@ -282,8 +282,8 @@ jobs:
           cat web.log || true
           exit 1
 
-      - name: Run Playwright E2E tests
-        run: bun run e2e
+      - name: Run Playwright browser tests
+        run: bun run browser-test
         env:
           NODE_ENV: test
           APP_BASE_URL: http://localhost:3000

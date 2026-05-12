@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const AUTH_SETUP_PATTERN = /auth\.setup\.ts/;
+
 /**
  * Playwright configuration for anonshare.dev E2E tests.
  *
@@ -25,8 +27,14 @@ export default defineConfig({
 
   projects: [
     {
+      name: 'setup',
+      testMatch: AUTH_SETUP_PATTERN
+    },
+    {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] }
+      testIgnore: AUTH_SETUP_PATTERN,
+      use: { ...devices['Desktop Chrome'] },
+      dependencies: ['setup']
     }
   ]
 });

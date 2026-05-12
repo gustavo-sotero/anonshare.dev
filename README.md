@@ -157,7 +157,8 @@ bun run --cwd apps/web dev
 | `bun run check` | Biome format + lint with auto-fix |
 | `bun run db:generate` | Generate Drizzle migration files from schema changes |
 | `bun run db:migrate` | Apply pending migrations |
-| `bun run e2e` | Run Playwright browser tests (requires a running local stack) |
+| `bun run browser-test` | Run Playwright browser tests (requires a running local stack) |
+| `bun run e2e` | Compatibility alias for `bun run browser-test` |
 | `bun run e2e:ui` | Open the Playwright interactive test UI |
 | `bun run infra:up` | Start Docker services |
 | `bun run infra:down` | Stop Docker services (keep volumes) |

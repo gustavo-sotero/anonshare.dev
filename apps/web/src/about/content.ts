@@ -222,7 +222,7 @@ export const ABOUT_OPERATIONS = [
   {
     eyebrow: 'Verification',
     title: 'Service-backed browser E2E in CI',
-    body: 'Playwright tests run against the full local stack (web + API + worker + all dependencies) in CI. They cover the anonymous upload flow, one-time download consumption, share-page unavailability states, and admin hide/restore affecting public visibility — the cross-process behaviors that unit tests cannot reach.'
+    body: 'Playwright tests run against the full local stack (web + API + worker + all dependencies) in CI. They cover the anonymous upload flow, preview and download gating on share pages, report-triggered auto-hide, and authenticated admin moderation and pagination flows — the cross-process behaviors that unit tests cannot reach.'
   }
 ];
 
