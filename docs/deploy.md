@@ -26,6 +26,7 @@ For Dokploy, use the dedicated compose file at `docker-compose.dokploy.yml`.
 - Healthchecks are container-local and Bun-based, so they do not depend on `curl` being present in the slim image.
 - Browser-side requests from `apps/web` always target `/api` on the same public origin. In Dokploy, the public app host must therefore route `/` to the `web` service and `/api` to the `api` service. A separate API-only domain is optional, but it does not replace the required same-origin `/api` route.
 - The `web` service defaults `APP_API_URL` to `http://api:3001` inside the Compose network so SSR can talk to the `api` container directly. Override it only if you intentionally need a different internal route.
+- The compose stack now includes a one-shot `migrate` service. `api` and `worker` wait for it to complete successfully, and `web` waits for a healthy `api`, so first boot does not race database schema creation.
 
 Recommended Dokploy flow:
 
@@ -33,7 +34,7 @@ Recommended Dokploy flow:
 2. Add all production variables in Dokploy's Environment tab.
 3. Create the PostgreSQL and Redis services separately in Dokploy and copy their connection URLs into `DATABASE_URL` and `REDIS_URL`.
 4. In Dokploy Domains, configure the public app host twice: `/` to the `web` service port `3000`, and `/api` to the `api` service port `3001`. If you expose the API on an additional dedicated host, treat that as optional extra routing rather than the primary browser path.
-5. Run the operational container before the first public rollout to apply migrations.
+5. Deploy the stack. The `migrate` service applies pending migrations automatically before `api` and `worker` start serving traffic.
 
 Recommended Dokploy environment values for this topology:
 
@@ -45,14 +46,14 @@ APP_API_URL=http://api:3001
 `APP_BASE_URL` is the public browser origin. `APP_API_URL` is the internal SSR-to-API URL used by the `web` container inside the Compose network.
 
 The compose file also defines an `ops` profile-backed service built from the `tooling` target in `Dockerfile`.
-Use it for one-off operational commands:
+Use it for one-off operational commands that are not part of normal startup:
 
 ```bash
-docker compose -f docker-compose.dokploy.yml --profile ops run --rm ops
 docker compose -f docker-compose.dokploy.yml --profile ops run --rm ops packages/infrastructure/src/scripts/seed.ts
+docker compose -f docker-compose.dokploy.yml --profile ops run --rm ops packages/infrastructure/src/scripts/run-drizzle.ts migrate
 ```
 
-The first command runs database migrations. The second runs the idempotent seed script.
+The first command runs the idempotent seed script. The second manually reruns migrations when you need an explicit operational replay.
 
 ## Infrastructure Dependencies
 
@@ -214,10 +215,10 @@ The API and worker `/health` endpoints return 200 when all dependencies are reac
 ## Startup Order
 
 1. Start PostgreSQL and Redis (external managed services or containers).
-2. Apply migrations (`bun run db:migrate`).
+2. Apply migrations (`bun run db:migrate`) or let the Dokploy `migrate` service do it automatically.
 3. Start `apps/api` — validates env on boot, fails fast if any required var is missing.
 4. Start `apps/worker` — validates env on boot, opens `WORKER_HEALTH_PORT`, connects to queues, and registers the hourly reconcile scheduler.
-5. Start `apps/web` — validates env on boot.
+5. Start `apps/web` after the API is healthy so SSR and upload flows do not boot against an unavailable backend.
 
 For local and CI verification, run `bun run verify` from the workspace root. It includes dependency readiness, BullMQ version parity, typecheck, lint, tests, build, and migration validation.
 

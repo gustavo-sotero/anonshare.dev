@@ -2,6 +2,9 @@ import { stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateWebEnv } from '@anonshare/infrastructure/config';
+import { logger } from '@anonshare/infrastructure/logger';
+import { isPathInsideDirectory } from '../src/server/path-utils';
+import { readStaticAssetAliasMap, resolveStaticAssetFallback } from '../src/server/static-assets';
 
 validateWebEnv();
 
@@ -10,6 +13,26 @@ validateWebEnv();
 const appDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const clientDir = resolve(appDir, 'dist/client');
 const serverEntry = resolve(appDir, 'dist/server/server.js');
+const staticAssetAliases = readStaticAssetAliasMap(clientDir);
+
+async function tryServeStaticFile(filePath: string, cacheControl: string, headers?: HeadersInit) {
+  try {
+    const fileStat = await stat(filePath);
+
+    if (!fileStat.isFile()) {
+      return null;
+    }
+
+    return new Response(Bun.file(filePath), {
+      headers: {
+        ...headers,
+        'cache-control': cacheControl
+      }
+    });
+  } catch {
+    return null;
+  }
+}
 
 // Import the TanStack Start SSR handler. Dynamic import keeps the server.js
 // out of the bun-build bundle so it is loaded from disk at runtime.
@@ -23,20 +46,43 @@ const server = Bun.serve({
   port,
   async fetch(req) {
     const url = new URL(req.url);
+    const requestId = req.headers.get('x-request-id') ?? crypto.randomUUID();
     // Resolve the requested path inside clientDir to prevent traversal.
     const resolved = resolve(clientDir, `.${url.pathname}`);
 
     // Only serve paths that are strictly inside clientDir.
-    if (resolved.startsWith(`${clientDir}/`)) {
-      try {
-        const s = await stat(resolved);
-        if (s.isFile()) {
-          return new Response(Bun.file(resolved), {
-            headers: { 'cache-control': 'public, max-age=31536000, immutable' }
-          });
-        }
-      } catch {
-        // File not found — fall through to SSR handler below.
+    if (isPathInsideDirectory(clientDir, resolved)) {
+      const exactFileResponse = await tryServeStaticFile(
+        resolved,
+        'public, max-age=31536000, immutable'
+      );
+
+      if (exactFileResponse) {
+        return exactFileResponse;
+      }
+    }
+
+    const fallbackAsset = resolveStaticAssetFallback(url.pathname, staticAssetAliases);
+
+    if (fallbackAsset) {
+      const fallbackPath = resolve(clientDir, 'assets', fallbackAsset);
+      const fallbackResponse = await tryServeStaticFile(fallbackPath, 'no-store', {
+        'x-asset-fallback': '1',
+        'x-request-id': requestId
+      });
+
+      if (fallbackResponse) {
+        logger.warn('Served current asset for stale hashed request', {
+          event: 'static_asset_fallback_served',
+          service: 'web',
+          requestId,
+          actor: 'anonymous',
+          entity: { type: 'static_asset', id: url.pathname },
+          outcome: 'success',
+          fallbackAsset: `/assets/${fallbackAsset}`
+        });
+
+        return fallbackResponse;
       }
     }
 

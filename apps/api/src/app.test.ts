@@ -92,6 +92,22 @@ describe('/api prefix routing', () => {
     expect(body.status).toBe('ok');
   });
 
+  test('readiness endpoint is reachable at /health/ready', async () => {
+    const app = createApiApp({ healthCheck: healthyDeps });
+    const res = await app.request('http://localhost/health/ready');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { status: string };
+    expect(body.status).toBe('ok');
+  });
+
+  test('readiness endpoint is reachable at /api/health/ready (proxy path)', async () => {
+    const app = createApiApp({ healthCheck: healthyDeps });
+    const res = await app.request('http://localhost/api/health/ready');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { status: string };
+    expect(body.status).toBe('ok');
+  });
+
   test('health endpoint remains reachable at /health (internal/Docker path)', async () => {
     const app = createApiApp({ healthCheck: healthyDeps });
     const res = await app.request('http://localhost/health');

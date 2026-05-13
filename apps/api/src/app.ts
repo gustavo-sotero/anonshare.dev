@@ -1,4 +1,5 @@
 import type { DependencyHealthResult } from '@anonshare/infrastructure/health';
+import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { secureHeaders } from 'hono/secure-headers';
 import { logger } from './logger';
@@ -27,6 +28,40 @@ async function defaultHealthCheck(): Promise<DependencyHealthResult[]> {
 async function summarizeHealth(results: DependencyHealthResult[]) {
   const { evaluatePlatformHealth } = await import('@anonshare/infrastructure/health');
   return evaluatePlatformHealth(results);
+}
+
+async function respondWithHealth(
+  c: Context<ApiAppBindings>,
+  healthCheck: () => Promise<DependencyHealthResult[]>
+) {
+  const requestId = c.get('requestId');
+  const results = await healthCheck();
+  const summary = await summarizeHealth(results);
+
+  c.header('cache-control', 'no-store');
+
+  logger.info('Health check completed', {
+    event: 'health_check_completed',
+    service: 'api',
+    requestId,
+    actor: 'system',
+    entity: { type: 'health_check', id: 'api' },
+    outcome: summary.ok ? 'success' : 'failure',
+    status: summary.status,
+    dependencyCount: summary.results.length,
+    degradedDependencies: summary.results
+      .filter((result) => !result.ok)
+      .map((result) => result.dependency)
+  });
+
+  return c.json(
+    {
+      dependencies: summary.results,
+      service: 'api',
+      status: summary.status
+    },
+    summary.ok ? 200 : 503
+  );
 }
 
 function resolveActor(path: string): 'admin' | 'anonymous' | 'worker' {
@@ -91,36 +126,8 @@ export function createApiApp(options: ApiAppOptions = {}): Hono<ApiAppBindings> 
   //                 strip the prefix, so both paths must be handled)
   const routes = new Hono<ApiAppBindings>();
 
-  routes.get('/health', async (c) => {
-    const requestId = c.get('requestId');
-    const results = await healthCheck();
-    const summary = await summarizeHealth(results);
-
-    c.header('cache-control', 'no-store');
-
-    logger.info('Health check completed', {
-      event: 'health_check_completed',
-      service: 'api',
-      requestId,
-      actor: 'system',
-      entity: { type: 'health_check', id: 'api' },
-      outcome: summary.ok ? 'success' : 'failure',
-      status: summary.status,
-      dependencyCount: summary.results.length,
-      degradedDependencies: summary.results
-        .filter((result) => !result.ok)
-        .map((result) => result.dependency)
-    });
-
-    return c.json(
-      {
-        dependencies: summary.results,
-        service: 'api',
-        status: summary.status
-      },
-      summary.ok ? 200 : 503
-    );
-  });
+  routes.get('/health', (c) => respondWithHealth(c, healthCheck));
+  routes.get('/health/ready', (c) => respondWithHealth(c, healthCheck));
 
   routes.route('/upload', uploadRouter);
   routes.route('/share', shareRouter);
