@@ -83,6 +83,22 @@ describe('API health endpoint', () => {
   });
 });
 
+describe('/api prefix routing', () => {
+  test('health endpoint is reachable at /api/health (proxy path)', async () => {
+    const app = createApiApp({ healthCheck: healthyDeps });
+    const res = await app.request('http://localhost/api/health');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { status: string };
+    expect(body.status).toBe('ok');
+  });
+
+  test('health endpoint remains reachable at /health (internal/Docker path)', async () => {
+    const app = createApiApp({ healthCheck: healthyDeps });
+    const res = await app.request('http://localhost/health');
+    expect(res.status).toBe(200);
+  });
+});
+
 describe('Security headers', () => {
   test('sets x-content-type-options on every response', async () => {
     const app = createApiApp({ healthCheck: healthyDeps });

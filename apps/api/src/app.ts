@@ -30,11 +30,14 @@ async function summarizeHealth(results: DependencyHealthResult[]) {
 }
 
 function resolveActor(path: string): 'admin' | 'anonymous' | 'worker' {
-  if (path.startsWith('/admin')) {
+  // Normalize paths that arrive with the /api proxy prefix intact
+  const normalized = path.startsWith('/api/') ? path.slice(4) : path;
+
+  if (normalized.startsWith('/admin')) {
     return 'admin';
   }
 
-  if (path.startsWith('/_internal')) {
+  if (normalized.startsWith('/_internal')) {
     return 'worker';
   }
 
@@ -79,7 +82,16 @@ export function createApiApp(options: ApiAppOptions = {}): Hono<ApiAppBindings> 
     });
   });
 
-  app.get('/health', async (c) => {
+  // ── Route definitions ─────────────────────────────────────────────────────
+  // All routes are collected on a sub-app so they can be mounted at two
+  // different path prefixes simultaneously:
+  //   /          — used by Docker healthchecks and internal SSR calls
+  //   /api       — used by browser requests forwarded by the reverse proxy
+  //                (Traefik/Dokploy routes /api → this container but does not
+  //                 strip the prefix, so both paths must be handled)
+  const routes = new Hono<ApiAppBindings>();
+
+  routes.get('/health', async (c) => {
     const requestId = c.get('requestId');
     const results = await healthCheck();
     const summary = await summarizeHealth(results);
@@ -110,12 +122,15 @@ export function createApiApp(options: ApiAppOptions = {}): Hono<ApiAppBindings> 
     );
   });
 
-  app.route('/upload', uploadRouter);
-  app.route('/share', shareRouter);
-  app.route('/report', reportRouter);
-  app.route('/admin', adminRouter);
-  app.route('/admin/auth', authRouter);
-  app.route('/_internal', internalRouter);
+  routes.route('/upload', uploadRouter);
+  routes.route('/share', shareRouter);
+  routes.route('/report', reportRouter);
+  routes.route('/admin', adminRouter);
+  routes.route('/admin/auth', authRouter);
+  routes.route('/_internal', internalRouter);
+
+  app.route('/', routes);
+  app.route('/api', routes);
 
   // ── Global error handler — prevent stack traces from leaking to clients ───
   app.onError((err, c) => {

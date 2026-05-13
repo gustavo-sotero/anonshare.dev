@@ -19,7 +19,7 @@ type ExpirationPreset = '1h' | '24h' | '7d' | '30d';
 type UploadPhase =
   | { kind: 'idle' }
   | { kind: 'selected'; file: File }
-  | { kind: 'uploading'; progress: number }
+  | { kind: 'uploading'; progress: number; file: File }
   | { kind: 'done'; shareToken: string; shareUrl: string; expiresAt: string }
   | { kind: 'error'; message: string; file: File | null };
 
@@ -154,13 +154,13 @@ export function HomePage() {
 
     if (!file) return;
 
-    setPhase({ kind: 'uploading', progress: 0 });
+    setPhase({ kind: 'uploading', progress: 0, file });
 
     try {
       const result = await uploadFile(
         file,
         { oneTime, allowPreview, expiresAt: expiresAtFromPreset(expiration) },
-        (pct) => setPhase({ kind: 'uploading', progress: pct })
+        (pct) => setPhase({ kind: 'uploading', progress: pct, file })
       );
       setPhase({ kind: 'done', ...result });
     } catch (err) {
@@ -192,7 +192,13 @@ export function HomePage() {
   }, []);
 
   const selectedFile =
-    phase.kind === 'selected' ? phase.file : phase.kind === 'error' ? phase.file : null;
+    phase.kind === 'selected'
+      ? phase.file
+      : phase.kind === 'uploading'
+        ? phase.file
+        : phase.kind === 'error'
+          ? phase.file
+          : null;
 
   return (
     <SiteFrame
@@ -262,6 +268,7 @@ export function HomePage() {
                 ref={fileInputRef}
                 type="file"
                 className="drop-zone__input"
+                disabled={phase.kind === 'uploading'}
                 onChange={handleFileInput}
               />
 
@@ -323,6 +330,7 @@ export function HomePage() {
                   role="switch"
                   aria-checked={oneTime}
                   aria-labelledby="switch-one-time-label"
+                  disabled={phase.kind === 'uploading'}
                   className={`toggle${oneTime ? ' toggle--on' : ''}`}
                   onClick={() => handleOneTimeChange(!oneTime)}
                 >
@@ -331,7 +339,9 @@ export function HomePage() {
               </label>
 
               {/* Allow preview */}
-              <label className={`option-row${oneTime ? ' option-row--disabled' : ''}`}>
+              <label
+                className={`option-row${oneTime || phase.kind === 'uploading' ? ' option-row--disabled' : ''}`}
+              >
                 <div className="option-row__text">
                   <span id="switch-preview-label" className="option-row__name">
                     Allow preview
@@ -347,10 +357,10 @@ export function HomePage() {
                   role="switch"
                   aria-checked={allowPreview}
                   aria-labelledby="switch-preview-label"
-                  disabled={oneTime}
-                  className={`toggle${allowPreview && !oneTime ? ' toggle--on' : ''}${oneTime ? ' toggle--locked' : ''}`}
+                  disabled={oneTime || phase.kind === 'uploading'}
+                  className={`toggle${allowPreview && !oneTime ? ' toggle--on' : ''}${oneTime || phase.kind === 'uploading' ? ' toggle--locked' : ''}`}
                   onClick={() => {
-                    if (!oneTime) setAllowPreview((v) => !v);
+                    if (!oneTime && phase.kind !== 'uploading') setAllowPreview((v) => !v);
                   }}
                 >
                   <span className="toggle__thumb" />
@@ -368,6 +378,7 @@ export function HomePage() {
                     <button
                       key={preset}
                       type="button"
+                      disabled={phase.kind === 'uploading'}
                       className={`expiry-btn${expiration === preset ? ' expiry-btn--active' : ''}`}
                       onClick={() => setExpiration(preset)}
                     >
