@@ -14,7 +14,7 @@ const serverEntry = resolve(appDir, 'dist/server/server.js');
 // Import the TanStack Start SSR handler. Dynamic import keeps the server.js
 // out of the bun-build bundle so it is loaded from disk at runtime.
 const { default: serverHandler } = (await import(serverEntry)) as {
-  default: { fetch: (req: Request) => Response | Promise<Response> };
+  default: { fetch: (req: Request) => Promise<Response> };
 };
 
 const port = Number(process.env.PORT ?? 3000);
@@ -40,7 +40,22 @@ const server = Bun.serve({
       }
     }
 
-    return serverHandler.fetch(req) as Promise<Response>;
+    const response = await serverHandler.fetch(req);
+
+    // Prevent browsers from caching HTML documents so asset hashes from a
+    // previous deploy never break a fresh deployment.
+    const ct = response.headers.get('content-type') ?? '';
+    if (ct.includes('text/html')) {
+      const headers = new Headers(response.headers);
+      headers.set('cache-control', 'no-store');
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers
+      });
+    }
+
+    return response;
   }
 });
 
