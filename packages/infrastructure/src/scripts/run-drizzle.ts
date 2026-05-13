@@ -1,7 +1,9 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { dirname, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { migrate as migrateDb } from 'drizzle-orm/bun-sql/migrator';
 import { deriveLocalPlatformEnv } from '../config/index';
+import { createDb } from '../db/client';
 import { logger } from '../logger/index';
 
 const SUPPORTED_COMMANDS = new Set(['generate', 'migrate']);
@@ -50,6 +52,11 @@ async function runDrizzle(command: string, packageRoot: string): Promise<void> {
   }
 }
 
+async function runMigrate(migrationsDir: string): Promise<void> {
+  const db = createDb();
+  await migrateDb(db, { migrationsFolder: migrationsDir });
+}
+
 const command = process.argv[2];
 
 if (!command || !SUPPORTED_COMMANDS.has(command)) {
@@ -77,6 +84,11 @@ if (command === 'migrate' && !hasFiles(migrationsDir, migrationExtensionSet)) {
     event: 'db_migrate_skipped',
     outcome: 'success'
   });
+  process.exit(0);
+}
+
+if (command === 'migrate') {
+  await runMigrate(migrationsDir);
   process.exit(0);
 }
 
