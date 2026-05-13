@@ -95,8 +95,22 @@ export function extractErrorMessage(body: unknown, fallback: string): string {
 
 // ─── Transport ───────────────────────────────────────────────────────────────
 
+/**
+ * Resolve an /api/... path to an absolute URL when running server-side (SSR).
+ * Bun's global fetch requires absolute URLs; browsers resolve relative paths
+ * against window.location automatically.
+ *
+ * The /api prefix is the Vite dev-server proxy prefix that maps to the root of
+ * the Hono API server, so we strip it when building the absolute URL.
+ */
+function resolveAdminApiUrl(path: string): string {
+  if (typeof window !== 'undefined') return path;
+  const apiBase = (process.env.APP_API_URL ?? 'http://localhost:3001').replace(/\/$/, '');
+  return apiBase + path.replace(/^\/api/, '');
+}
+
 export async function fetchAdminJson(url: string, signal?: AbortSignal): Promise<unknown> {
-  const response = await fetch(url, {
+  const response = await fetch(resolveAdminApiUrl(url), {
     headers: { accept: 'application/json' },
     credentials: 'same-origin',
     signal: signal ?? null
@@ -120,7 +134,7 @@ export async function postAdminJson(
   data: unknown,
   signal?: AbortSignal
 ): Promise<{ ok: boolean; body: unknown; status: number }> {
-  const response = await fetch(url, {
+  const response = await fetch(resolveAdminApiUrl(url), {
     method: 'POST',
     headers: {
       accept: 'application/json',

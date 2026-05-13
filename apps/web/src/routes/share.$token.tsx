@@ -47,7 +47,9 @@ export const Route = createFileRoute('/share/$token')({
     // On the server during SSR, call the Hono API directly via env URL.
     // On the client during navigation, use the /api proxy path.
     const isServer = typeof window === 'undefined';
-    const apiBase = isServer ? (process.env.APP_API_URL ?? 'http://localhost:3001') : '/api';
+    const apiBase = isServer
+      ? (process.env.APP_API_URL ?? 'http://localhost:3001').replace(/\/$/, '')
+      : '/api';
 
     let result: Awaited<ReturnType<typeof fetchShareMeta>>;
     try {
