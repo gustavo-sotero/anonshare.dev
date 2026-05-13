@@ -29,6 +29,8 @@ services:
     init: true
     restart: unless-stopped
     stop_grace_period: 15s
+    networks:
+      - dokploy-network
 
   api:
     build:
@@ -57,6 +59,8 @@ services:
     init: true
     restart: unless-stopped
     stop_grace_period: 20s
+    networks:
+      - dokploy-network
 
   worker:
     build:
@@ -100,3 +104,9 @@ services:
     environment:
       NODE_ENV: production
     restart: 'no'
+    networks:
+      - dokploy-network
+
+networks:
+  dokploy-network:
+    external: true
