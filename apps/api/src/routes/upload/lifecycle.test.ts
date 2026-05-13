@@ -291,4 +291,65 @@ describe('POST /upload — successful upload lifecycle', () => {
     expect(response.status).toBe(201);
     expect(headAttempts).toBe(3);
   });
+
+  test('passes uploadedAt explicitly so expiresAt and uploaded_at share the same clock origin', async () => {
+    // Regression: previously uploaded_at was left to DB DEFAULT now() while
+    // expiresAt was computed from the app clock. If the DB clock trailed by
+    // even a millisecond the files_expires_at_window_chk constraint would fire.
+    // Fix: both values must originate from the same capturedAt Date instance.
+    let capturedInsert: Record<string, unknown> | undefined;
+    const app = buildApp(
+      makeMockDeps({ captureInsertValues: (v) => (capturedInsert = v as Record<string, unknown>) })
+    );
+
+    const response = await postUpload(app, {
+      file: makeFile(),
+      oneTime: false,
+      allowPreview: false
+    });
+
+    expect(response.status).toBe(201);
+    expect(capturedInsert).toBeDefined();
+
+    const insertedUploadedAt = capturedInsert?.uploadedAt;
+    const insertedExpiresAt = capturedInsert?.expiresAt;
+
+    // uploadedAt must be an explicit Date — not left to the DB default
+    expect(insertedUploadedAt).toBeInstanceOf(Date);
+    // expiresAt must also be a Date
+    expect(insertedExpiresAt).toBeInstanceOf(Date);
+
+    const thirtyDaysMs = MAX_EXPIRATION_DAYS * 24 * 60 * 60 * 1000;
+    const diff =
+      (insertedExpiresAt as Date).getTime() - (insertedUploadedAt as Date).getTime();
+
+    // Difference must equal exactly 30 days — any deviation means they came
+    // from different clock reads and would risk violating the DB constraint.
+    expect(diff).toBe(thirtyDaysMs);
+  });
+
+  test('expiresAt and uploadedAt use the same origin when caller provides explicit expiresAt', async () => {
+    let capturedInsert: Record<string, unknown> | undefined;
+    const app = buildApp(
+      makeMockDeps({ captureInsertValues: (v) => (capturedInsert = v as Record<string, unknown>) })
+    );
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    const expiresAt = new Date(Date.now() + sevenDaysMs).toISOString();
+
+    await postUpload(app, { file: makeFile(), expiresAt });
+
+    const insertedUploadedAt = capturedInsert?.uploadedAt;
+    const insertedExpiresAt = capturedInsert?.expiresAt;
+
+    expect(insertedUploadedAt).toBeInstanceOf(Date);
+    expect(insertedExpiresAt).toBeInstanceOf(Date);
+
+    // expiresAt must be >= uploadedAt (DB constraint); with an explicit 7-day
+    // value there should be ~7 days between them.
+    const diff =
+      (insertedExpiresAt as Date).getTime() - (insertedUploadedAt as Date).getTime();
+
+    expect(diff).toBeGreaterThan(sevenDaysMs - 5_000);
+    expect(diff).toBeLessThanOrEqual(sevenDaysMs);
+  });
 });

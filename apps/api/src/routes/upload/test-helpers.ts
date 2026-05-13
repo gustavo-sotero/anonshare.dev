@@ -7,6 +7,7 @@ import type { UploadRouterDeps } from './types';
 type DbStubs = {
   insertShouldThrow?: boolean;
   insertReturn?: { id: string }[];
+  captureInsertValues?: (values: unknown) => void;
   updateReturn?: { id: string }[];
   updateShouldThrow?: boolean;
   deleteShouldThrow?: boolean;
@@ -50,8 +51,9 @@ export function makeMockDeps(
     getDb: () =>
       ({
         insert: (_tbl: unknown) => ({
-          values: (_vals: unknown) => ({
+          values: (vals: unknown) => ({
             returning: async (_cols: unknown) => {
+              db.captureInsertValues?.(vals);
               if (db.insertShouldThrow) throw new Error('DB insert failed');
               return insertReturn;
             }
