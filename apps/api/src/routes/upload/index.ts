@@ -213,9 +213,18 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
     const token = generateShareToken();
     const objectKey = generateObjectKey();
     const sanitizedFilename = sanitizeFilename(metadata.filename);
+    // Capture a single reference timestamp so that `uploaded_at` (persisted to
+    // the DB explicitly) and `expires_at` share the same origin. Using the DB's
+    // DEFAULT now() for uploaded_at while computing expires_at from the app
+    // clock can cause a clock-skew violation of the
+    // `files_expires_at_window_chk` constraint when the DB clock trails the
+    // app clock by even a millisecond.
+    const uploadedAt = new Date();
     // Always enforce a maximum lifetime. If the uploader did not specify an
     // expiration, default to MAX_EXPIRATION_DAYS (30 d) so no file lives forever.
-    const expiresAt = metadata.expiresAt ? new Date(metadata.expiresAt) : getMaxExpirationDate();
+    const expiresAt = metadata.expiresAt
+      ? new Date(metadata.expiresAt)
+      : getMaxExpirationDate(uploadedAt);
 
     logger.info('Upload started', {
       event: 'upload.created',
@@ -247,6 +256,7 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
           status: 'pending_upload',
           allowPreview: metadata.allowPreview,
           oneTimeDownload: metadata.oneTime,
+          uploadedAt,
           expiresAt
         })
         .returning({ id: files.id });
@@ -263,7 +273,8 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
         actor: 'anonymous',
         entity: { type: 'file', id: token },
         outcome: 'failure',
-        error: err instanceof Error ? err.message : String(err)
+        error: err instanceof Error ? err.message : String(err),
+        cause: err instanceof Error && err.cause instanceof Error ? err.cause.message : undefined
       });
       return c.json(
         errorBody(API_ERROR_CODES.INTERNAL_ERROR, 'Upload failed due to an internal error'),

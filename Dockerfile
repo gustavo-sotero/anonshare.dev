@@ -1,4 +1,4 @@
-ARG BUN_VERSION=1.3.10
+ARG BUN_VERSION=1.3.14
 
 FROM oven/bun:${BUN_VERSION}-slim AS base
 WORKDIR /app
