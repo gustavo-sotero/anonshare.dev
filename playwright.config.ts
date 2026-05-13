@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import { defineConfig, devices } from '@playwright/test';
 
 const AUTH_SETUP_PATTERN = /auth\.setup\.ts/;
