@@ -1,0 +1,102 @@
+# Browser-side requests from the web app always target `/api` on the same
+# public origin. In Dokploy, route `/` to `web` and `/api` to `api`.
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: web
+      args:
+        BUN_VERSION: ${BUN_VERSION:-1.3.10}
+    env_file:
+      - .env
+    environment:
+      APP_API_URL: ${APP_API_URL:-http://api:3001}
+      NODE_ENV: production
+      PORT: 3000
+    expose:
+      - '3000'
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - const port = process.env.PORT ?? '3000'; const response = await fetch('http://127.0.0.1:' + port + '/health'); if (!response.ok) throw new Error('web healthcheck failed with status ' + response.status);
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 15s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+      args:
+        BUN_VERSION: ${BUN_VERSION:-1.3.10}
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+    expose:
+      - '3001'
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - const port = process.env.PORT ?? '3001'; const response = await fetch('http://127.0.0.1:' + port + '/health'); if (!response.ok) throw new Error('api healthcheck failed with status ' + response.status);
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 20s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: worker
+      args:
+        BUN_VERSION: ${BUN_VERSION:-1.3.10}
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      WORKER_HEALTH_PORT: 3002
+    expose:
+      - '3002'
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - const port = process.env.WORKER_HEALTH_PORT ?? '3002'; const response = await fetch('http://127.0.0.1:' + port + '/health'); if (!response.ok) throw new Error('worker healthcheck failed with status ' + response.status);
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  ops:
+    profiles:
+      - ops
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: tooling
+      args:
+        BUN_VERSION: ${BUN_VERSION:-1.3.10}
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+    restart: 'no'

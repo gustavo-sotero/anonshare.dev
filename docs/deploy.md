@@ -14,6 +14,46 @@ Three processes must be running in production:
 
 The processes are deliberately independent and can be scaled or restarted individually. The environment-variable contract is shared across local development, CI, and deployment: local development reads it from the root `.env`, while CI and production inject the same variable names through the host platform or secret manager.
 
+## Dokploy Deployment
+
+For Dokploy, use the dedicated compose file at `docker-compose.dokploy.yml`.
+
+- It builds three Bun slim images from the repository root: `web`, `api`, and `worker`.
+- PostgreSQL and Redis are intentionally not part of this compose file. Create them as separate Dokploy-managed services and point the app stack to them through `DATABASE_URL` and `REDIS_URL`.
+- Object storage is also external. Inject the canonical `STORAGE_*` variables through Dokploy.
+- The compose file uses `env_file: .env` because Dokploy writes UI-defined variables to a sibling `.env` file instead of injecting them automatically into containers.
+- The compose file uses `expose`, not `ports`, for the application services because Dokploy routes external traffic through Traefik and expects the public port to be selected in the Dokploy UI.
+- Healthchecks are container-local and Bun-based, so they do not depend on `curl` being present in the slim image.
+- Browser-side requests from `apps/web` always target `/api` on the same public origin. In Dokploy, the public app host must therefore route `/` to the `web` service and `/api` to the `api` service. A separate API-only domain is optional, but it does not replace the required same-origin `/api` route.
+- The `web` service defaults `APP_API_URL` to `http://api:3001` inside the Compose network so SSR can talk to the `api` container directly. Override it only if you intentionally need a different internal route.
+
+Recommended Dokploy flow:
+
+1. Create the app as a Docker Compose deployment and point it at `docker-compose.dokploy.yml`.
+2. Add all production variables in Dokploy's Environment tab.
+3. Create the PostgreSQL and Redis services separately in Dokploy and copy their connection URLs into `DATABASE_URL` and `REDIS_URL`.
+4. In Dokploy Domains, configure the public app host twice: `/` to the `web` service port `3000`, and `/api` to the `api` service port `3001`. If you expose the API on an additional dedicated host, treat that as optional extra routing rather than the primary browser path.
+5. Run the operational container before the first public rollout to apply migrations.
+
+Recommended Dokploy environment values for this topology:
+
+```dotenv
+APP_BASE_URL=https://anonshare.dev
+APP_API_URL=http://api:3001
+```
+
+`APP_BASE_URL` is the public browser origin. `APP_API_URL` is the internal SSR-to-API URL used by the `web` container inside the Compose network.
+
+The compose file also defines an `ops` profile-backed service built from the `tooling` target in `Dockerfile`.
+Use it for one-off operational commands:
+
+```bash
+docker compose -f docker-compose.dokploy.yml --profile ops run --rm ops
+docker compose -f docker-compose.dokploy.yml --profile ops run --rm ops packages/infrastructure/src/scripts/seed.ts
+```
+
+The first command runs database migrations. The second runs the idempotent seed script.
+
 ## Infrastructure Dependencies
 
 All three processes depend on:
@@ -32,7 +72,11 @@ The API reads `X-Forwarded-For` for IP-based rate limiting and download event lo
 
 ### HTTPS
 
-All `APP_BASE_URL` and `APP_API_URL` values must use `https://` in any environment beyond local development. GitHub OAuth callbacks, admin session cookies, and presigned storage URLs depend on HTTPS for transport security.
+All public browser-facing `APP_BASE_URL` values must use `https://` in any environment beyond local development. Public `APP_API_URL` values should also use `https://`.
+
+Exception: in container-to-container deployments such as Dokploy Compose, `APP_API_URL` may be an internal HTTP service URL like `http://api:3001` when it is used only by SSR inside the private Docker network. In that topology, browser traffic must still arrive over HTTPS through the public `APP_BASE_URL` host and its `/api` route.
+
+GitHub OAuth callbacks, admin session cookies, and presigned storage URLs depend on HTTPS for transport security.
 
 ### Queue Version Alignment
 

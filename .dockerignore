@@ -1,0 +1,15 @@
+.git
+.github
+node_modules
+apps/*/node_modules
+apps/*/dist
+packages/*/dist
+packages/*/node_modules
+coverage
+playwright-report
+test-results
+*.tsbuildinfo
+CODEBASE_ANALYSIS_*.md
+.env
+.env.local
+.env.*.local
