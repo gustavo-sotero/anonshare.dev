@@ -702,20 +702,9 @@ code {
   font-size: 0.78rem;
 }
 
-.upload-reset-link {
-  margin-top: 12px;
-  background: none;
-  border: none;
-  color: var(--muted);
-  font-size: 0.82rem;
-  cursor: pointer;
-  padding: 0;
-  text-decoration: underline;
-  text-decoration-color: rgba(163, 193, 173, 0.4);
-}
-
-.upload-reset-link:hover {
-  color: var(--text);
+.upload-reset-btn {
+  margin-top: 16px;
+  width: 100%;
 }
 
 .upload-error {

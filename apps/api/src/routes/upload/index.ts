@@ -297,7 +297,8 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
         key: objectKey,
         body: fileField.stream(),
         contentType: metadata.mimeType,
-        contentLength: metadata.sizeBytes
+        contentLength: metadata.sizeBytes,
+        contentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent(sanitizedFilename)}`
       });
     } catch (err) {
       // The storage layer now owns both the write and the post-write

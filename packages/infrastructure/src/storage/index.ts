@@ -6,6 +6,7 @@ export interface StorageObject {
   body: ReadableStream | Uint8Array;
   contentType: string;
   contentLength?: number;
+  contentDisposition?: string;
 }
 
 export type StorageHeadObject = {
@@ -53,7 +54,10 @@ export type StorageSignedUrlOptions = {
 type StorageFileLike = {
   exists(): Promise<boolean>;
   stat(): Promise<{ size: number; type?: string }>;
-  write(body: string | Uint8Array | Response, options?: { type?: string }): Promise<unknown>;
+  write(
+    body: string | Uint8Array | Response,
+    options?: { type?: string; contentDisposition?: string }
+  ): Promise<unknown>;
   stream(): ReadableStream;
   delete(): Promise<unknown>;
   presign(options: { expiresIn: number; method: StorageSignedUrlMethod }): string | Promise<string>;
@@ -306,9 +310,14 @@ export function createStorageAdapter(options: CreateStorageAdapterOptions = {}):
   }
 
   async function put(obj: StorageObject): Promise<void> {
+    const writeOptions: { type?: string; contentDisposition?: string } = {
+      type: obj.contentType
+    };
+    if (obj.contentDisposition) writeOptions.contentDisposition = obj.contentDisposition;
+
     const writeOperation = () =>
       withTimeout(
-        getFile(obj.key).write(toWritableBody(obj.body), { type: obj.contentType }),
+        getFile(obj.key).write(toWritableBody(obj.body), writeOptions),
         timeouts.writeMs,
         'put'
       );

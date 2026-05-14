@@ -13,7 +13,7 @@ type FakeStorageFile = {
   streamImpl?: () => ReadableStream;
   writeImpl?: (
     body: string | Uint8Array | Response,
-    options?: { type?: string }
+    options?: { type?: string; contentDisposition?: string }
   ) => Promise<unknown>;
 };
 
@@ -47,7 +47,10 @@ function makeFile(overrides: FakeStorageFile = {}) {
             }
           });
     },
-    async write(body: string | Uint8Array | Response, options?: { type?: string }) {
+    async write(
+      body: string | Uint8Array | Response,
+      options?: { type?: string; contentDisposition?: string }
+    ) {
       return overrides.writeImpl ? overrides.writeImpl(body, options) : undefined;
     }
   };

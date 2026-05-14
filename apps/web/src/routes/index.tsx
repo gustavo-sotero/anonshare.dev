@@ -239,7 +239,11 @@ export function HomePage() {
             <p className="upload-meta-note">Expires {formatDateDeterministic(phase.expiresAt)}</p>
           )}
 
-          <button type="button" className="upload-reset-link" onClick={reset}>
+          <button
+            type="button"
+            className="button-link button-link--ghost upload-reset-btn"
+            onClick={reset}
+          >
             Upload another file
           </button>
         </section>
