@@ -315,6 +315,24 @@ describe('GET /admin/auth/callback', () => {
     expect(second.headers.get('location')).toContain('error=state_expired');
   });
 
+  test('passes redirect_uri matching the callback URL to exchangeCodeForToken', async () => {
+    let capturedRedirectUri: string | undefined;
+
+    const app = buildApp({
+      exchangeCodeForToken: async (_code, redirectUri) => {
+        capturedRedirectUri = redirectUri;
+        return { access_token: 'gho_test_token', token_type: 'bearer', scope: 'read:user' };
+      }
+    });
+    const login = await initiateLogin(app);
+
+    await app.request(
+      `http://localhost/admin/auth/callback?code=valid_code&state=${encodeURIComponent(login.state)}`
+    );
+
+    expect(capturedRedirectUri).toBe(`${APP_BASE_URL}/api/admin/auth/callback`);
+  });
+
   test('redirects with error when token exchange fails', async () => {
     const app = buildApp({
       exchangeCodeForToken: async () => {

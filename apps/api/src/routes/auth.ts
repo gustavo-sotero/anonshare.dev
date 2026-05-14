@@ -94,7 +94,7 @@ export type AuthRouterDeps = {
   getAppBaseUrl?: () => string;
   getAppEnv?: () => string;
   now?: () => Date;
-  exchangeCodeForToken?: (code: string) => Promise<GitHubTokenResponse>;
+  exchangeCodeForToken?: (code: string, redirectUri: string) => Promise<GitHubTokenResponse>;
   fetchGitHubUser?: (accessToken: string) => Promise<GitHubUserResponse>;
   oauthStateRepo?: OAuthStateRepository;
   getRedis?: () => Redis;
@@ -118,7 +118,10 @@ function defaultGetOAuthStateRepo(): OAuthStateRepository {
   return _oauthStateRepo;
 }
 
-async function defaultExchangeCodeForToken(code: string): Promise<GitHubTokenResponse> {
+async function defaultExchangeCodeForToken(
+  code: string,
+  redirectUri: string
+): Promise<GitHubTokenResponse> {
   const response = await fetch(GITHUB_TOKEN_URL, {
     method: 'POST',
     headers: {
@@ -128,7 +131,8 @@ async function defaultExchangeCodeForToken(code: string): Promise<GitHubTokenRes
     body: JSON.stringify({
       client_id: authConfig.githubClientId(),
       client_secret: authConfig.githubClientSecret(),
-      code
+      code,
+      redirect_uri: redirectUri
     })
   });
 
@@ -189,6 +193,10 @@ export function createAuthRouter(deps: AuthRouterDeps = {}): Hono {
     return deps.oauthStateRepo ?? defaultGetOAuthStateRepo();
   }
 
+  function getCallbackUrl(): string {
+    return `${resolvedDeps.getAppBaseUrl()}/api/admin/auth/callback`;
+  }
+
   const router = new Hono();
 
   router.use('*', async (c, next) => {
@@ -208,8 +216,7 @@ export function createAuthRouter(deps: AuthRouterDeps = {}): Hono {
     await getOAuthStateRepo().create(state, redirectTo, OAUTH_STATE_TTL_MS);
 
     const clientId = resolvedDeps.getGithubClientId();
-    const baseUrl = resolvedDeps.getAppBaseUrl();
-    const callbackUrl = `${baseUrl}/api/admin/auth/callback`;
+    const callbackUrl = getCallbackUrl();
 
     const params = new URLSearchParams({
       client_id: clientId,
@@ -273,7 +280,7 @@ export function createAuthRouter(deps: AuthRouterDeps = {}): Hono {
     // Exchange authorization code for access token
     let tokenResponse: GitHubTokenResponse;
     try {
-      tokenResponse = await resolvedDeps.exchangeCodeForToken(parsed.data.code);
+      tokenResponse = await resolvedDeps.exchangeCodeForToken(parsed.data.code, getCallbackUrl());
     } catch (err) {
       logger.error('Admin OAuth callback: token exchange failed', {
         event: 'admin.login_denied',
