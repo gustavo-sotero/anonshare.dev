@@ -48,4 +48,24 @@ describe('PublicReportPanel SSR', () => {
     expect(html).toContain('Submit report');
     expect(html).toContain('Suspicious payload');
   });
+
+  it('renders a stable success hook after submission', () => {
+    const html = renderToStaticMarkup(
+      <PublicReportPanel
+        reportOpen={false}
+        reportReason="spam"
+        reportMessage=""
+        reportPhase="success"
+        reportError={null}
+        onOpen={noop}
+        onReasonChange={noop}
+        onMessageChange={noop}
+        onSubmit={noop}
+        onCancel={noop}
+      />
+    );
+
+    expect(html).toContain('data-testid="report-success"');
+    expect(html).toContain('Your report has been received.');
+  });
 });

@@ -38,6 +38,7 @@ describe('UnavailableFilePage SSR', () => {
     expect(html).toContain('This file is not available.');
     expect(html).toContain('Share a new file');
     expect(html).toContain('Report slot');
+    expect(html).toContain('data-testid="unavailable"');
     expect(html).not.toContain('moderated');
     expect(html).not.toContain('reported');
   });

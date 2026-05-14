@@ -29,7 +29,7 @@ export type UnavailableFilePageProps = {
 export function UnavailableFilePage({ code, info, reportPanel }: UnavailableFilePageProps) {
   return (
     <SiteFrame eyebrow="File link" title={info.label} summary={info.message} noRail>
-      <section className="panel panel--unavailable">
+      <section className="panel panel--unavailable" data-testid="unavailable">
         <div className="unavail-icon" aria-hidden="true">
           {getUnavailabilityIcon(code)}
         </div>

@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateWebEnv } from '@anonshare/infrastructure/config';
 import { logger } from '@anonshare/infrastructure/logger';
+import { isApiProxyRequest, proxyApiRequest } from '../src/server/api-proxy';
 import { isPathInsideDirectory } from '../src/server/path-utils';
 import { readStaticAssetAliasMap, resolveStaticAssetFallback } from '../src/server/static-assets';
 
@@ -41,12 +42,18 @@ const { default: serverHandler } = (await import(serverEntry)) as {
 };
 
 const port = Number(process.env.PORT ?? 3000);
+const apiBase = (process.env.APP_API_URL ?? 'http://localhost:3001').replace(/\/$/, '');
 
 const server = Bun.serve({
   port,
   async fetch(req) {
     const url = new URL(req.url);
     const requestId = req.headers.get('x-request-id') ?? crypto.randomUUID();
+
+    if (isApiProxyRequest(url)) {
+      return proxyApiRequest(req, apiBase, requestId);
+    }
+
     // Resolve the requested path inside clientDir to prevent traversal.
     const resolved = resolve(clientDir, `.${url.pathname}`);
 

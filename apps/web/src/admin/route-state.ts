@@ -29,6 +29,13 @@ export async function loadAdminRouteData(
     loadDashboardStateImpl?: (signal?: AbortSignal) => Promise<DashboardState>;
   } = {}
 ): Promise<AdminRouteLoaderData> {
+  if (!params.loadDashboardStateImpl && typeof window === 'undefined') {
+    return {
+      initialState: { kind: 'loading' },
+      loginError: getAdminLoginErrorMessage(params.error)
+    };
+  }
+
   const loadState = params.loadDashboardStateImpl ?? loadDashboardState;
 
   return {

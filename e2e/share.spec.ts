@@ -22,7 +22,7 @@ test('upload → share → download happy path', async ({ page }) => {
   await page.getByRole('button', { name: 'Upload and generate link' }).click();
 
   // The share URL should appear after a successful upload
-  const shareLink = page.locator('[data-testid="share-link"], a[href*="/share/"]').first();
+  const shareLink = page.getByTestId('share-link');
   await expect(shareLink).toBeVisible({ timeout: 15_000 });
 
   const href = await shareLink.getAttribute('href');
@@ -84,9 +84,7 @@ test('one-time download is consumed after first access', async ({ page }) => {
 
   // Second visit: file should show consumed/unavailable state
   await page.goto(shareUrl);
-  await expect(
-    page.locator('[data-testid="unavailable"], :text("no longer available"), :text("consumed")')
-  ).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId('unavailable')).toBeVisible({ timeout: 10_000 });
 });
 
 /**
@@ -109,11 +107,7 @@ test('expired share link shows unavailable state', async ({ page }) => {
   await page.goto(shareUrl);
 
   // Should not show the file as downloadable; should show some unavailable indicator
-  await expect(
-    page.locator(
-      '[data-testid="unavailable"], :text("no longer available"), :text("expired"), :text("not available")'
-    )
-  ).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId('unavailable')).toBeVisible({ timeout: 10_000 });
 });
 
 /**
@@ -134,11 +128,9 @@ test('report submissions auto-hide a file after the threshold is reached', async
     await page.getByRole('button', { name: 'Submit report' }).click();
 
     if (attempt < 3) {
-      await expect(page.getByText('Your report has been received.')).toBeVisible({
-        timeout: 10_000
-      });
+      await expect(page.getByTestId('report-success')).toBeVisible({ timeout: 10_000 });
     }
   }
 
-  await expect(page.getByText('This file is not available.')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId('unavailable')).toBeVisible({ timeout: 10_000 });
 });

@@ -29,6 +29,13 @@ describe('getAdminLoginErrorMessage', () => {
 });
 
 describe('loadAdminRouteData', () => {
+  it('defers the initial admin dashboard fetch during SSR', async () => {
+    const data = await loadAdminRouteData();
+
+    expect(data.initialState).toEqual({ kind: 'loading' });
+    expect(data.loginError).toBeNull();
+  });
+
   it('passes the router abort signal through to dashboard loading', async () => {
     const controller = new AbortController();
     let receivedSignal: AbortSignal | undefined;

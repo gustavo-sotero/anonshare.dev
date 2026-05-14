@@ -4,11 +4,12 @@ import {
   isPreviewSupported,
   isPubliclyAccessible
 } from '@anonshare/domain';
+import { app } from '@anonshare/infrastructure/config';
 import { files } from '@anonshare/infrastructure/db/schema';
 import { applyRateLimit, recordRateLimitBlocked } from '@anonshare/infrastructure/rate-limit';
 import { StorageError } from '@anonshare/infrastructure/storage';
 import { eq } from 'drizzle-orm';
-import type { Hono } from 'hono';
+import type { Context, Hono } from 'hono';
 import { logger } from '../../logger';
 import {
   errorBody,
@@ -27,20 +28,14 @@ import { isExpiredByTimestamp, statusToErrorCode } from './helpers';
 import type { ResolvedShareDeps } from './types';
 
 export function registerSharePreviewRoutes(router: Hono, deps: ResolvedShareDeps): void {
-  // ── GET /:token/preview ─────────────────────────────────────────────────────
-  // Issues a presigned URL for in-browser preview rendering.
-  // Prerequisites: file accessible, allowPreview=true, not one-time, MIME in allowlist.
-  router.get('/:token/preview', async (c) => {
-    const requestId = getRequestId(c);
-    const rawToken = c.req.param('token');
-    const token = parseShareToken(rawToken);
-    if (!token) {
-      return c.json(errorBody(API_ERROR_CODES.NOT_FOUND, 'File not found'), 404);
-    }
-
+  const resolvePreviewableFile = async (
+    c: Context,
+    requestId: string,
+    rawToken: string,
+    token: string
+  ): Promise<{ ok: true; file: typeof files.$inferSelect } | { ok: false; response: Response }> => {
     c.header('cache-control', 'no-store');
 
-    // ── Rate limiting ────────────────────────────────────────────────────────
     const rawIpPreview = c.req.header('x-forwarded-for') ?? c.req.header('x-real-ip');
     const previewIpHash = rawIpPreview ? await hashIp(rawIpPreview) : null;
     if (previewIpHash) {
@@ -70,10 +65,13 @@ export function registerSharePreviewRoutes(router: Hono, deps: ResolvedShareDeps
           'preview',
           logger
         );
-        return c.json(
-          errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
-          429
-        );
+        return {
+          ok: false,
+          response: c.json(
+            errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
+            429
+          )
+        };
       }
 
       const tokenLimit = await applyRateLimit(
@@ -101,10 +99,13 @@ export function registerSharePreviewRoutes(router: Hono, deps: ResolvedShareDeps
           'preview_token',
           logger
         );
-        return c.json(
-          errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
-          429
-        );
+        return {
+          ok: false,
+          response: c.json(
+            errorBody(API_ERROR_CODES.RATE_LIMITED, 'Too many requests. Please try again later.'),
+            429
+          )
+        };
       }
     }
 
@@ -122,45 +123,154 @@ export function registerSharePreviewRoutes(router: Hono, deps: ResolvedShareDeps
         outcome: 'failure',
         error: err instanceof Error ? err.message : String(err)
       });
-      return c.json(errorBody(API_ERROR_CODES.INTERNAL_ERROR, 'An internal error occurred'), 500);
+      return {
+        ok: false,
+        response: c.json(
+          errorBody(API_ERROR_CODES.INTERNAL_ERROR, 'An internal error occurred'),
+          500
+        )
+      };
     }
 
     if (!file) {
-      return c.json(errorBody(API_ERROR_CODES.NOT_FOUND, 'File not found'), 404);
+      return {
+        ok: false,
+        response: c.json(errorBody(API_ERROR_CODES.NOT_FOUND, 'File not found'), 404)
+      };
     }
 
-    // Enforce expiration at read time, independent of background job execution.
     if (isExpiredByTimestamp(file)) {
-      return c.json(errorBody(API_ERROR_CODES.FILE_EXPIRED, 'This file has expired'), 410);
+      return {
+        ok: false,
+        response: c.json(errorBody(API_ERROR_CODES.FILE_EXPIRED, 'This file has expired'), 410)
+      };
     }
 
     if (!isPubliclyAccessible(file.status)) {
       const code = statusToErrorCode(file.status);
       const message = getUnavailabilityMessage(file.status) ?? 'This file is unavailable';
-      return c.json(errorBody(code, message), 410);
+      return {
+        ok: false,
+        response: c.json(errorBody(code, message), 410)
+      };
     }
 
     if (!file.allowPreview) {
-      return c.json(
-        errorBody(API_ERROR_CODES.FILE_UNAVAILABLE, 'Preview is not enabled for this file.'),
-        403
-      );
+      return {
+        ok: false,
+        response: c.json(
+          errorBody(API_ERROR_CODES.FILE_UNAVAILABLE, 'Preview is not enabled for this file.'),
+          403
+        )
+      };
     }
 
     if (file.oneTimeDownload) {
-      return c.json(
-        errorBody(
-          API_ERROR_CODES.FILE_UNAVAILABLE,
-          'Preview is not available for one-time download files.'
-        ),
-        403
-      );
+      return {
+        ok: false,
+        response: c.json(
+          errorBody(
+            API_ERROR_CODES.FILE_UNAVAILABLE,
+            'Preview is not available for one-time download files.'
+          ),
+          403
+        )
+      };
     }
 
     if (!isPreviewSupported(file.mimeType)) {
+      return {
+        ok: false,
+        response: c.json(
+          errorBody(
+            API_ERROR_CODES.FILE_UNAVAILABLE,
+            'Preview is not supported for this file type.'
+          ),
+          422
+        )
+      };
+    }
+
+    return { ok: true, file };
+  };
+
+  router.get('/:token/preview/content', async (c) => {
+    const requestId = getRequestId(c);
+    const rawToken = c.req.param('token');
+    const token = parseShareToken(rawToken);
+    if (!token) {
+      return c.json(errorBody(API_ERROR_CODES.NOT_FOUND, 'File not found'), 404);
+    }
+
+    const resolved = await resolvePreviewableFile(c, requestId, rawToken, token);
+    if (!resolved.ok) {
+      return resolved.response;
+    }
+
+    const file = resolved.file;
+
+    try {
+      const objectStream = await deps.storage.getObject(file.objectKey);
+
+      if (!objectStream) {
+        return c.json(
+          errorBody(API_ERROR_CODES.FILE_UNAVAILABLE, 'Preview is temporarily unavailable.'),
+          503
+        );
+      }
+
+      c.header('cache-control', 'no-store, private');
+      c.header('content-type', file.mimeType);
+      return new Response(objectStream, { status: 200, headers: c.res.headers });
+    } catch (err) {
+      logger.error('Preview: content streaming failed', {
+        event: 'preview_blocked',
+        requestId,
+        actor: 'anonymous',
+        entity: { type: 'file', id: token },
+        outcome: 'failure',
+        storageErrorKind: err instanceof StorageError ? err.kind : undefined,
+        error: err instanceof Error ? err.message : String(err)
+      });
       return c.json(
-        errorBody(API_ERROR_CODES.FILE_UNAVAILABLE, 'Preview is not supported for this file type.'),
-        422
+        errorBody(API_ERROR_CODES.INTERNAL_ERROR, 'Failed to load preview content'),
+        500
+      );
+    }
+  });
+
+  // ── GET /:token/preview ─────────────────────────────────────────────────────
+  // Issues a presigned URL for in-browser preview rendering.
+  // Prerequisites: file accessible, allowPreview=true, not one-time, MIME in allowlist.
+  router.get('/:token/preview', async (c) => {
+    const requestId = getRequestId(c);
+    const rawToken = c.req.param('token');
+    const token = parseShareToken(rawToken);
+    if (!token) {
+      return c.json(errorBody(API_ERROR_CODES.NOT_FOUND, 'File not found'), 404);
+    }
+
+    const resolved = await resolvePreviewableFile(c, requestId, rawToken, token);
+    if (!resolved.ok) {
+      return resolved.response;
+    }
+
+    const file = resolved.file;
+
+    if ((file.mimeType.split(';')[0] ?? file.mimeType).trim().startsWith('text/')) {
+      const expiresAt = new Date(Date.now() + PREVIEW_URL_EXPIRY_SECONDS * 1000).toISOString();
+      const previewUrl = `${app.baseUrl()}/api/share/${token}/preview/content`;
+      c.header('cache-control', 'no-store, private');
+      return c.json(
+        {
+          ok: true as const,
+          data: {
+            url: previewUrl,
+            expiresAt,
+            mimeType: file.mimeType
+          }
+        },
+        200
       );
     }
 

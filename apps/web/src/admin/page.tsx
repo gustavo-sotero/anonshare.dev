@@ -55,15 +55,52 @@ export function AdminPage({
   const [loginActionError, setLoginActionError] = useState<string | null>(null);
   const [logoutWarning, setLogoutWarning] = useState<string | null>(null);
 
+  const applyLoadedState = useCallback(
+    (nextState: DashboardState) => {
+      setState(nextState);
+
+      if (nextState.kind !== 'ready') {
+        onNavigate?.('overview', null);
+        setLogoutWarning(null);
+      }
+    },
+    [onNavigate]
+  );
+
+  const requestDashboardState = useCallback(() => {
+    setIsRefreshing(true);
+
+    void runTrackedRequest({
+      tracker: requestTracker,
+      run: (signal) => loadDashboardState(signal),
+      onSuccess: applyLoadedState,
+      onError: (error: unknown) => {
+        setState({
+          kind: 'error',
+          message: error instanceof Error ? error.message : 'Failed to load dashboard.'
+        });
+      },
+      onFinally: () => setIsRefreshing(false)
+    });
+  }, [applyLoadedState, requestTracker]);
+
   useEffect(() => {
     setState(loaderData.initialState);
 
-    if (loaderData.initialState.kind !== 'ready') {
+    if (loaderData.initialState.kind !== 'ready' && loaderData.initialState.kind !== 'loading') {
       onNavigate?.('overview', null);
     }
 
     setLogoutWarning(null);
   }, [loaderData.initialState, onNavigate]);
+
+  useEffect(() => {
+    if (loaderData.initialState.kind !== 'loading') {
+      return;
+    }
+
+    requestDashboardState();
+  }, [loaderData.initialState.kind, requestDashboardState]);
 
   const handleAccessLost = useCallback(
     (error: AdminAccessError) => {
@@ -82,27 +119,8 @@ export function AdminPage({
       return;
     }
 
-    setIsRefreshing(true);
-
-    void runTrackedRequest({
-      tracker: requestTracker,
-      run: (signal) => loadDashboardState(signal),
-      onSuccess: (nextState) => {
-        setState(nextState);
-        if (nextState.kind !== 'ready') {
-          onNavigate?.('overview', null);
-          setLogoutWarning(null);
-        }
-      },
-      onError: (error: unknown) => {
-        setState({
-          kind: 'error',
-          message: error instanceof Error ? error.message : 'Failed to load dashboard.'
-        });
-      },
-      onFinally: () => setIsRefreshing(false)
-    });
-  }, [onNavigate, refreshKey, requestTracker]);
+    requestDashboardState();
+  }, [refreshKey, requestDashboardState]);
 
   const refresh = () => setRefreshKey((key) => key + 1);
 

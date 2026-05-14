@@ -1,10 +1,38 @@
 import { describe, expect, test } from 'bun:test';
 import { API_ERROR_CODES } from '@anonshare/contracts';
+import { app as appConfig } from '@anonshare/infrastructure/config';
 import { buildApp, makeFileRow, makeMockDeps, makeRedis, request } from './test-helpers';
 
 // ── GET /:token/preview ───────────────────────────────────────────────────────
 
 describe('GET /share/:token/preview', () => {
+  test('returns same-origin preview content URL for text previews', async () => {
+    const app = buildApp(
+      makeMockDeps(
+        {
+          findFirst: makeFileRow({
+            allowPreview: true,
+            mimeType: 'text/plain',
+            oneTimeDownload: false
+          })
+        },
+        { signedUrl: 'https://storage.example.com/preview' }
+      )
+    );
+    const res = await request(app, '/share/Abc123defghijkl012/preview');
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      data: { url: string; mimeType: string; expiresAt: string };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data.url).toBe(
+      `${appConfig.baseUrl()}/api/share/Abc123defghijkl012/preview/content`
+    );
+    expect(body.data.mimeType).toBe('text/plain');
+  });
+
   test('returns presigned URL for eligible preview', async () => {
     const app = buildApp(
       makeMockDeps(
@@ -162,7 +190,7 @@ describe('GET /share/:token/preview', () => {
         {
           findFirst: makeFileRow({
             allowPreview: true,
-            mimeType: 'text/plain',
+            mimeType: 'image/png',
             oneTimeDownload: false
           })
         },
@@ -181,7 +209,6 @@ describe('GET /share/:token/preview', () => {
       'video/mp4',
       'audio/mpeg',
       'application/pdf',
-      'text/plain',
       'text/markdown'
     ];
 
@@ -195,6 +222,49 @@ describe('GET /share/:token/preview', () => {
       const res = await request(app, '/share/Abc123defghijkl012/preview');
       expect(res.status).toBe(200);
     }
+  });
+});
+
+describe('GET /share/:token/preview/content', () => {
+  test('streams preview text through the API for same-origin reads', async () => {
+    const app = buildApp(
+      makeMockDeps(
+        {
+          findFirst: makeFileRow({
+            allowPreview: true,
+            mimeType: 'text/plain;charset=utf-8',
+            oneTimeDownload: false
+          })
+        },
+        { objectBody: 'Preview me in the browser' }
+      )
+    );
+
+    const res = await request(app, '/share/Abc123defghijkl012/preview/content');
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('no-store, private');
+    expect(res.headers.get('content-type')).toBe('text/plain;charset=utf-8');
+    await expect(res.text()).resolves.toBe('Preview me in the browser');
+  });
+
+  test('returns 500 when preview content loading fails', async () => {
+    const app = buildApp(
+      makeMockDeps(
+        {
+          findFirst: makeFileRow({
+            allowPreview: true,
+            mimeType: 'text/plain',
+            oneTimeDownload: false
+          })
+        },
+        { getObjectShouldThrow: true }
+      )
+    );
+
+    const res = await request(app, '/share/Abc123defghijkl012/preview/content');
+
+    expect(res.status).toBe(500);
   });
 });
 

@@ -26,9 +26,18 @@ import type { UploadRouterDeps, UploadStorage } from './types';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const UPLOAD_RATE_WINDOW_SECONDS = 3600;
+const REPLAYABLE_UPLOAD_BUFFER_BYTES = 8 * 1024 * 1024;
 
 const getDb = sharedGetDb;
 const hashIpForRateLimit = hashIp;
+
+async function resolveStorageBody(file: File): Promise<ReadableStream | Uint8Array> {
+  if (file.size > REPLAYABLE_UPLOAD_BUFFER_BYTES) {
+    return file.stream();
+  }
+
+  return new Uint8Array(await file.arrayBuffer());
+}
 
 /**
  * Create the upload router with optional injectable dependencies.
@@ -295,7 +304,7 @@ export function createUploadRouter(deps: UploadRouterDeps = {}): Hono {
     try {
       await resolveStorage.putConfirmed({
         key: objectKey,
-        body: fileField.stream(),
+        body: await resolveStorageBody(fileField),
         contentType: metadata.mimeType,
         contentLength: metadata.sizeBytes,
         contentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent(sanitizedFilename)}`

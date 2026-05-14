@@ -252,13 +252,25 @@ describe('POST /upload — successful upload lifecycle', () => {
     expect(response.status).toBe(201);
   });
 
-  test('streams the uploaded file to storage instead of buffering it into a Uint8Array', async () => {
+  test('buffers small uploads so transient storage writes can be retried', async () => {
     let capturedBody: unknown;
     const app = buildApp(
       makeMockDeps({}, { capturePut: (obj) => (capturedBody = (obj as { body?: unknown }).body) })
     );
 
     const response = await postUpload(app, { file: makeFile() });
+
+    expect(response.status).toBe(201);
+    expect(capturedBody).toBeInstanceOf(Uint8Array);
+  });
+
+  test('streams large uploads to storage instead of buffering them in memory', async () => {
+    let capturedBody: unknown;
+    const app = buildApp(
+      makeMockDeps({}, { capturePut: (obj) => (capturedBody = (obj as { body?: unknown }).body) })
+    );
+
+    const response = await postUpload(app, { file: makeFile(8 * 1024 * 1024 + 1) });
 
     expect(response.status).toBe(201);
     expect(capturedBody).toBeInstanceOf(ReadableStream);
@@ -320,8 +332,7 @@ describe('POST /upload — successful upload lifecycle', () => {
     expect(insertedExpiresAt).toBeInstanceOf(Date);
 
     const thirtyDaysMs = MAX_EXPIRATION_DAYS * 24 * 60 * 60 * 1000;
-    const diff =
-      (insertedExpiresAt as Date).getTime() - (insertedUploadedAt as Date).getTime();
+    const diff = (insertedExpiresAt as Date).getTime() - (insertedUploadedAt as Date).getTime();
 
     // Difference must equal exactly 30 days — any deviation means they came
     // from different clock reads and would risk violating the DB constraint.
@@ -346,8 +357,7 @@ describe('POST /upload — successful upload lifecycle', () => {
 
     // expiresAt must be >= uploadedAt (DB constraint); with an explicit 7-day
     // value there should be ~7 days between them.
-    const diff =
-      (insertedExpiresAt as Date).getTime() - (insertedUploadedAt as Date).getTime();
+    const diff = (insertedExpiresAt as Date).getTime() - (insertedUploadedAt as Date).getTime();
 
     expect(diff).toBeGreaterThan(sevenDaysMs - 5_000);
     expect(diff).toBeLessThanOrEqual(sevenDaysMs);

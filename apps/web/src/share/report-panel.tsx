@@ -41,7 +41,7 @@ export function PublicReportPanel({
   return (
     <section className="panel panel--muted">
       {reportPhase === 'success' ? (
-        <p className="panel__copy report-success">
+        <p className="panel__copy report-success" data-testid="report-success">
           &#x2713; Your report has been received. The operator reviews all reports.
         </p>
       ) : reportOpen ? (

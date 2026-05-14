@@ -13,11 +13,16 @@ function buildSeedIp(index: number): string {
   return `198.51.${thirdOctet}.${fourthOctet}`;
 }
 
+function buildSeedPrefix(label: string): string {
+  return `${label}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
 async function seedPreviewEnabledFiles(count: number): Promise<string[]> {
   const filenames: string[] = [];
+  const prefix = buildSeedPrefix('cursor-preview');
 
   for (let index = 0; index < count; index += 1) {
-    const filename = `cursor-preview-${String(index).padStart(2, '0')}.txt`;
+    const filename = `${prefix}-${String(index).padStart(2, '0')}.txt`;
     filenames.push(filename);
 
     await uploadFile({
@@ -33,16 +38,17 @@ async function seedPreviewEnabledFiles(count: number): Promise<string[]> {
 
 async function seedMalwareReports(count: number): Promise<string[]> {
   const messages: string[] = [];
+  const prefix = buildSeedPrefix('report-pagination');
 
   for (let index = 0; index < count; index += 1) {
-    const filename = `cursor-report-${String(index).padStart(2, '0')}.txt`;
+    const filename = `cursor-report-${prefix}-${String(index).padStart(2, '0')}.txt`;
     const upload = await uploadFile({
       filename,
       content: `report seed ${index}`,
       forwardedFor: buildSeedIp(index + 300)
     });
 
-    const message = `report-pagination-${String(index).padStart(2, '0')}`;
+    const message = `${prefix}-${String(index).padStart(2, '0')}`;
     messages.push(message);
 
     await submitShareReport({
@@ -81,7 +87,7 @@ test.describe('authenticated admin flows', () => {
     expect(hideResponse.ok()).toBe(true);
 
     await page.goto(shareUrl);
-    await expect(page.getByText('This file is not available.')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('unavailable')).toBeVisible({ timeout: 10_000 });
   });
 
   /**
@@ -98,7 +104,7 @@ test.describe('authenticated admin flows', () => {
     });
 
     await page.goto(shareUrl);
-    await expect(page.getByText('This file is not available.')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('unavailable')).toBeVisible({ timeout: 10_000 });
 
     const restoreResponse = await page.request.post(
       `${API_URL}/admin/files/${shareToken}/moderate`,

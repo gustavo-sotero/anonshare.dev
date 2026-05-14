@@ -89,6 +89,18 @@ function makeReadyState(): DashboardState {
 }
 
 describe('AdminPage SSR', () => {
+  it('renders a connecting gate while the browser boots the admin session', async () => {
+    const html = await renderAdminPage({
+      loaderData: {
+        initialState: { kind: 'loading' },
+        loginError: null
+      }
+    });
+
+    expect(html).toContain('Connecting');
+    expect(html).toContain('Checking the current admin session and loading dashboard data.');
+  });
+
   it('renders the branded admin login gate without the public site frame', async () => {
     const html = await renderAdminPage({
       loaderData: {

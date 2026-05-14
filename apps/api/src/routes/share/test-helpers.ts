@@ -37,6 +37,9 @@ export type DbStubs = {
 export type StorageStubs = {
   signedUrl?: string;
   createSignedUrlShouldThrow?: boolean;
+  objectBody?: string;
+  getObjectShouldThrow?: boolean;
+  missingObject?: boolean;
 };
 
 export type QueueStubs = {
@@ -120,6 +123,18 @@ export function makeMockDeps(
       createSignedUrl: async (_key: string, _opts: unknown) => {
         if (storage.createSignedUrlShouldThrow) throw new Error('Storage presign failed');
         return storage.signedUrl ?? 'https://storage.example.com/presigned-url?sig=abc123';
+      },
+      getObject: async (_key: string) => {
+        if (storage.getObjectShouldThrow) throw new Error('Storage read failed');
+        if (storage.missingObject) return null;
+
+        const body = storage.objectBody ?? 'preview body';
+        return new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(body));
+            controller.close();
+          }
+        });
       }
     },
 

@@ -4,6 +4,7 @@ import type { StorageSignedUrlOptions } from '@anonshare/infrastructure/storage'
 
 export type ShareStorage = {
   createSignedUrl(key: string, options: StorageSignedUrlOptions): Promise<string>;
+  getObject(key: string): Promise<ReadableStream | null>;
 };
 
 export type ShareRouterDeps = {

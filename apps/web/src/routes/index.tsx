@@ -228,6 +228,7 @@ export function HomePage() {
                 href={phase.shareUrl}
                 target="_blank"
                 rel="noopener noreferrer"
+                data-testid="share-link"
                 className="button-link button-link--ghost"
               >
                 Open link
