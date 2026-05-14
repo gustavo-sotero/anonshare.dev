@@ -17,6 +17,7 @@ The processes are deliberately independent and can be scaled or restarted indivi
 ## Dokploy Deployment
 
 For Dokploy, use the dedicated compose file at `docker-compose.dokploy.yml`.
+Dokploy should track the `release` branch, not `main`.
 
 - It builds three Bun slim images from the repository root: `web`, `api`, and `worker`.
 - PostgreSQL and Redis are intentionally not part of this compose file. Create them as separate Dokploy-managed services and point the app stack to them through `DATABASE_URL` and `REDIS_URL`.
@@ -27,14 +28,23 @@ For Dokploy, use the dedicated compose file at `docker-compose.dokploy.yml`.
 - Browser-side requests from `apps/web` always target `/api` on the same public origin. In Dokploy, the public app host must therefore route `/` to the `web` service and `/api` to the `api` service. A separate API-only domain is optional, but it does not replace the required same-origin `/api` route.
 - The `web` service defaults `APP_API_URL` to `http://api:3001` inside the Compose network so SSR can talk to the `api` container directly. Override it only if you intentionally need a different internal route.
 - The compose stack now includes a one-shot `migrate` service. `api` and `worker` wait for it to complete successfully, and `web` waits for a healthy `api`, so first boot does not race database schema creation.
+- `.github/workflows/release-tag.yml` promotes only the latest CI-approved `main` SHA: it derives a deterministic annotated `release-*` tag from the commit timestamp plus short SHA, skips stale runs, and advances `release` only when the current `release` tip is still in `main`'s lineage.
+- Promotion runs are serialized through a workflow concurrency lock, so lineage checks and branch updates happen one at a time.
 
 Recommended Dokploy flow:
 
-1. Create the app as a Docker Compose deployment and point it at `docker-compose.dokploy.yml`.
+1. Create the app as a Docker Compose deployment, point it at `docker-compose.dokploy.yml`, and configure the Git branch as `release`.
 2. Add all production variables in Dokploy's Environment tab.
 3. Create the PostgreSQL and Redis services separately in Dokploy and copy their connection URLs into `DATABASE_URL` and `REDIS_URL`.
 4. In Dokploy Domains, configure the public app host twice: `/` to the `web` service port `3000`, and `/api` to the `api` service port `3001`. If you expose the API on an additional dedicated host, treat that as optional extra routing rather than the primary browser path.
 5. Deploy the stack. The `migrate` service applies pending migrations automatically before `api` and `worker` start serving traffic.
+6. For rollback, push an older `release-*` tag back onto `release` and trigger a redeploy.
+
+Example rollback command:
+
+```bash
+git push origin release-YYYYMMDDHHMMSS-<12-char-sha>:refs/heads/release
+```
 
 Recommended Dokploy environment values for this topology:
 
@@ -88,7 +98,7 @@ Run `bun run verify:bullmq` from the workspace root before deployment or after d
 
 - `bun.lock` is a committed repository artifact, not a local-only cache file.
 - CI installs dependencies with `bun install --frozen-lockfile`.
-- `bun run verify:repo` mirrors that contract locally by failing when `bun.lock` is missing or when the CI workflow stops using a frozen Bun install.
+- `bun run verify:repo` mirrors that contract locally by failing when `bun.lock` is missing, when the CI workflow stops using a frozen Bun install, or when the release promotion workflow stops matching its required contract.
 
 Treat lockfile drift as a release blocker: deployment, CI, and local verification must all describe the same dependency graph.
 

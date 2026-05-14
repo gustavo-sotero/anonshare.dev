@@ -1,0 +1,107 @@
+name: Release Promotion
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-promotion-main
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote Main To Release
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Promote validated commit
+        shell: bash
+        env:
+          VALIDATED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          git fetch --force --prune --tags origin \
+            +refs/heads/main:refs/remotes/origin/main
+
+          if git ls-remote --exit-code --heads origin release >/dev/null 2>&1; then
+            git fetch --force --prune origin \
+              +refs/heads/release:refs/remotes/origin/release
+          fi
+
+          current_main_sha="$(git rev-parse origin/main)"
+
+          if [ "$VALIDATED_SHA" != "$current_main_sha" ]; then
+            {
+              echo "## Release promotion skipped"
+              echo ""
+              echo "- validated SHA: $VALIDATED_SHA"
+              echo "- current main SHA: $current_main_sha"
+              echo "- reason: a newer commit is already at the tip of main."
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            echo "Skipping promotion for $VALIDATED_SHA because main now points to $current_main_sha."
+            exit 0
+          fi
+
+          if git show-ref --verify --quiet refs/remotes/origin/release; then
+            release_sha="$(git rev-parse origin/release)"
+
+            if ! git merge-base --is-ancestor "$release_sha" "$VALIDATED_SHA"; then
+              echo "::error::Release branch points to $release_sha, which is not an ancestor of validated main commit $VALIDATED_SHA. Refusing to overwrite it."
+              exit 1
+            fi
+          else
+            release_sha="<missing>"
+          fi
+
+          commit_epoch="$(git show -s --format=%ct "$VALIDATED_SHA")"
+          release_timestamp="$(date -u -d "@$commit_epoch" +%Y%m%d%H%M%S)"
+          short_sha="${VALIDATED_SHA:0:12}"
+          release_tag="release-${release_timestamp}-${short_sha}"
+          tag_created="false"
+
+          if git rev-parse --verify --quiet "refs/tags/$release_tag" >/dev/null; then
+            tag_type="$(git cat-file -t "refs/tags/$release_tag")"
+            tag_sha="$(git rev-list -n 1 "$release_tag")"
+
+            if [ "$tag_type" != "tag" ]; then
+              echo "::error::Tag $release_tag already exists but is not annotated."
+              exit 1
+            fi
+
+            if [ "$tag_sha" != "$VALIDATED_SHA" ]; then
+              echo "::error::Tag $release_tag already exists on $tag_sha, expected $VALIDATED_SHA."
+              exit 1
+            fi
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$release_tag" "$VALIDATED_SHA" -m "Release $release_tag"
+            git push origin "refs/tags/$release_tag"
+            tag_created="true"
+          fi
+
+          git push origin "$VALIDATED_SHA:refs/heads/release"
+
+          {
+            echo "## Release promotion completed"
+            echo ""
+            echo "- promoted SHA: $VALIDATED_SHA"
+            echo "- release tag: $release_tag"
+            echo "- tag created now: $tag_created"
+            echo "- previous release head: $release_sha"
+            echo "- release branch now points to: $VALIDATED_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -44,8 +44,8 @@ packages/
 - [Docker](https://docs.docker.com/get-docker/) + Docker Compose v2
 
 Commit `bun.lock`. CI installs dependencies with a frozen lockfile, and `bun run verify:repo`
-enforces that the lockfile remains present in the repository and that the CI workflow keeps
-using a frozen Bun install contract.
+enforces that the lockfile remains present in the repository, that the CI workflow keeps
+using a frozen Bun install contract, and that the release promotion workflow stays committed.
 
 ---
 
@@ -150,7 +150,7 @@ bun run --cwd apps/web dev
 | Command | What it does |
 |---|---|
 | `bun run dev` | Run all app dev servers in parallel from the workspace root |
-| `bun run verify:repo` | Verify that `bun.lock` is committed and CI still uses a frozen Bun install |
+| `bun run verify:repo` | Verify that `bun.lock` is committed, CI still uses a frozen Bun install, and release promotion remains configured |
 | `bun run verify` | Dependency check + typecheck + lint + tests + build + migration validation |
 | `bun run build` | Bundle the web, API, and worker entrypoints |
 | `bun run test` | Run foundational tests |
@@ -165,6 +165,24 @@ bun run --cwd apps/web dev
 | `bun run infra:check` | Verify local PostgreSQL, Redis, and MinIO connectivity |
 | `bun run infra:reset` | Stop + destroy volumes + restart (full local reset) |
 | `bun run verify:bullmq` | Ensure every BullMQ-consuming workspace package stays on the same version line |
+
+---
+
+## Release promotion
+
+Pushes and pull requests still validate through `CI` on `main`. When a push build for the
+latest `main` commit finishes successfully, `.github/workflows/release-tag.yml` promotes that
+exact SHA by:
+
+- creating or reusing an annotated tag named `release-YYYYMMDDHHMMSS-<12-char-sha>` from the commit's UTC timestamp and short SHA;
+- skipping stale runs when a newer commit has already reached the tip of `main`;
+- remaining idempotent on reruns for the same commit by verifying and reusing the existing annotated tag instead of creating a second release;
+- refusing to advance `release` if that branch was moved outside the validated `main` lineage;
+- creating or fast-forwarding `release` to the validated commit so Dokploy can follow a deployment-safe branch.
+
+Dokploy should track `release`, not `main`. The deploy path is `CI approved -> immutable tag -> release branch promotion -> Dokploy deploy`.
+
+For rollback, repoint `release` to an older `release-*` tag and redeploy.
 
 ---
 

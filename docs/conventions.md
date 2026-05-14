@@ -39,7 +39,7 @@ This document consolidates the working conventions established in Module 1 so la
 
 ## Operational Commands
 
-- `bun run verify:repo` checks that `bun.lock` is committed and that CI still uses a frozen Bun install.
+- `bun run verify:repo` checks that `bun.lock` is committed, that CI still uses a frozen Bun install, and that the release promotion workflow contract remains intact.
 - `bun run infra:up` starts PostgreSQL, Redis, and MinIO.
 - `bun run infra:check` validates application-facing connectivity, not just container health.
 - `bun run verify:bullmq` enforces BullMQ version parity across every workspace package that depends on it.

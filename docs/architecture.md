@@ -116,7 +116,7 @@ Admin authentication uses GitHub OAuth with a strict single-identity allowlist (
 
 ## Validation workflow
 
-- `bun run verify:repo`: repository integrity gate for `bun.lock` presence and frozen Bun installs in CI.
+- `bun run verify:repo`: repository integrity gate for `bun.lock` presence, frozen Bun installs in CI, and the committed release promotion workflow contract.
 - `bun run typecheck`: workspace TypeScript validation.
 - `bun run lint`: Biome linting plus import-boundary enforcement.
 - `bun run test`: foundational tests.
@@ -125,7 +125,7 @@ Admin authentication uses GitHub OAuth with a strict single-identity allowlist (
 - `bun run db:generate` / `bun run db:migrate`: root Drizzle tooling for schema evolution; see `docs/conventions.md` for the full migration workflow.
 - `bun run verify`: aggregate quality gate used before commits, covering dependency readiness, typecheck, lint, tests, build, and migration validation.
 
-The dependency contract is part of the architecture boundary: `bun.lock` must be committed, and CI must keep using a frozen Bun install so local, CI, and deployment all resolve the same workspace graph.
+The repository integrity contract is part of the architecture boundary: `bun.lock` must be committed, CI must keep using a frozen Bun install, and the release promotion workflow must keep promoting CI-approved `main` commits onto `release` so local, CI, and deployment all resolve the same operational graph.
 
 ## Local troubleshooting order
 

@@ -121,14 +121,16 @@ Execute each flow end-to-end in the target environment.
 ## 5. CI/CD Verification
 
 - [ ] `.github/workflows/ci.yml` runs on every PR and push to `main`
+- [ ] `.github/workflows/release-tag.yml` promotes only the latest successful `main` SHA and advances `release`
 - [ ] `bun.lock` is committed and the branch does not rely on an untracked local lockfile
 - [ ] CI runs dependency health check, BullMQ version parity, lint, typecheck, tests, build, and migration validation
-- [ ] `bun run verify:repo` passes locally and CI still installs with a frozen Bun lockfile
+- [ ] `bun run verify:repo` passes locally, CI still installs with a frozen Bun lockfile, and the release promotion workflow contract remains intact
 - [ ] All CI steps pass with 0 errors on the `main` branch
 - [ ] CI uses containerized PostgreSQL, Redis, and MinIO for tests that need them
 - [ ] CI validates migration drift (`db:generate` + clean git diff on migrations)
 - [ ] The `bun run verify` local gate mirrors the CI gate
 - [ ] Browser E2E tests (Playwright) pass in CI against a full running stack
+- [ ] Dokploy is configured to deploy from `release`, not `main`
 
 ## 6. Performance Checks
 
