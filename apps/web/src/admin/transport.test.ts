@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 // Import the standalone function directly to avoid pulling in transport's
 // full import tree (which depends on @anonshare/contracts + fetch globals).
 // The function is re-exported here for isolated unit testing.
-import { extractErrorMessage, logoutAdmin } from './transport';
+import { extractErrorMessage, loadDashboardState, logoutAdmin } from './transport';
 
 const originalFetch = globalThis.fetch;
 
@@ -74,5 +74,87 @@ describe('logoutAdmin', () => {
       ok: false,
       message: 'network unreachable'
     });
+  });
+});
+
+// ─── loadDashboardState ───────────────────────────────────────────────────────
+
+const SESSION_FIXTURE = {
+  id: 'b5f12a3e-4c2d-4e5f-8a6b-7c9d0e1f2a3b',
+  githubId: '123456',
+  githubLogin: 'admin',
+  expiresAt: '2099-12-31T23:59:59.000Z'
+};
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' }
+  });
+}
+
+describe('loadDashboardState', () => {
+  it('returns error state when the session fetch throws a network error', async () => {
+    globalThis.fetch = (() => {
+      throw new Error('network error');
+    }) as unknown as typeof fetch;
+
+    const result = await loadDashboardState();
+
+    expect(result).toEqual({ kind: 'error', message: 'network error' });
+  });
+
+  it('returns unauthenticated state when the session fetch returns 401', async () => {
+    globalThis.fetch = (() =>
+      jsonResponse(
+        { reason: 'session_required', message: 'Please sign in.' },
+        401
+      )) as unknown as typeof fetch;
+
+    const result = await loadDashboardState();
+
+    expect(result).toEqual({ kind: 'unauthenticated' });
+  });
+
+  it('returns unauthenticated state when the session response is not authenticated', async () => {
+    globalThis.fetch = (() =>
+      jsonResponse({ authenticated: false, session: null })) as unknown as typeof fetch;
+
+    const result = await loadDashboardState();
+
+    expect(result).toEqual({ kind: 'unauthenticated' });
+  });
+
+  it('returns unauthenticated state with error when a parallel data fetch returns 401', async () => {
+    let callCount = 0;
+    globalThis.fetch = (() => {
+      callCount++;
+      if (callCount === 1) {
+        return jsonResponse({ authenticated: true, session: SESSION_FIXTURE });
+      }
+      return jsonResponse({ reason: 'session_expired', message: 'Session expired.' }, 401);
+    }) as unknown as typeof fetch;
+
+    const result = await loadDashboardState();
+
+    expect(result.kind).toBe('unauthenticated');
+    if (result.kind === 'unauthenticated') {
+      expect(result.error).toBe('Your admin session expired. Please sign in again.');
+    }
+  });
+
+  it('returns error state when a parallel data fetch throws a generic error', async () => {
+    let callCount = 0;
+    globalThis.fetch = (() => {
+      callCount++;
+      if (callCount === 1) {
+        return jsonResponse({ authenticated: true, session: SESSION_FIXTURE });
+      }
+      throw new Error('upstream timeout');
+    }) as unknown as typeof fetch;
+
+    const result = await loadDashboardState();
+
+    expect(result).toEqual({ kind: 'error', message: 'upstream timeout' });
   });
 });

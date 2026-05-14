@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useState } from 'react';
-import { AdminAccessError, getAdminAccessErrorMessage } from '~/admin/access';
+import { type AdminAccessError, getAdminAccessErrorMessage } from '~/admin/access';
 import {
   AdminDashboardNav,
   getAdminDashboardTabId,
@@ -87,12 +87,14 @@ export function AdminPage({
     void runTrackedRequest({
       tracker: requestTracker,
       run: (signal) => loadDashboardState(signal),
-      onSuccess: (nextState) => setState(nextState),
-      onError: (error: unknown) => {
-        if (error instanceof AdminAccessError) {
-          handleAccessLost(error);
-          return;
+      onSuccess: (nextState) => {
+        setState(nextState);
+        if (nextState.kind !== 'ready') {
+          onNavigate?.('overview', null);
+          setLogoutWarning(null);
         }
+      },
+      onError: (error: unknown) => {
         setState({
           kind: 'error',
           message: error instanceof Error ? error.message : 'Failed to load dashboard.'
@@ -100,7 +102,7 @@ export function AdminPage({
       },
       onFinally: () => setIsRefreshing(false)
     });
-  }, [handleAccessLost, refreshKey, requestTracker]);
+  }, [onNavigate, refreshKey, requestTracker]);
 
   const refresh = () => setRefreshKey((key) => key + 1);
 

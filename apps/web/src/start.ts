@@ -23,6 +23,18 @@ const requestPolicyMiddleware = createMiddleware().server(async ({ next, request
       statusCode: result.response.status
     });
 
+    if (result.response.status >= 500) {
+      logger.error('SSR returned a server error response', {
+        event: 'ssr_server_error',
+        service: 'web',
+        requestId,
+        actor: resolveWebActor(path),
+        entity: { type: 'http_request', id: `${request.method} ${path}` },
+        outcome: 'failure',
+        statusCode: result.response.status
+      });
+    }
+
     return result;
   } catch (error) {
     logger.error('Unhandled web request', {

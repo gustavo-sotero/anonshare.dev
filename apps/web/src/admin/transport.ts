@@ -19,7 +19,7 @@ import {
   adminSessionResponseSchema,
   type OperationalAnomalySummary
 } from '@anonshare/contracts';
-import { type AdminAccessError, createAdminAccessError } from '~/admin/access';
+import { AdminAccessError, createAdminAccessError } from '~/admin/access';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -272,26 +272,50 @@ export async function fetchAdminDownloads(
 }
 
 export async function loadDashboardState(signal?: AbortSignal): Promise<DashboardState> {
-  const sessionResponse = await fetchAdminSession(signal);
+  let sessionResponse: AdminSessionResponse;
+
+  try {
+    sessionResponse = await fetchAdminSession(signal);
+  } catch (error) {
+    if (error instanceof AdminAccessError) {
+      return { kind: 'unauthenticated' };
+    }
+    return {
+      kind: 'error',
+      message: error instanceof Error ? error.message : 'Failed to reach the admin service.'
+    };
+  }
 
   if (!sessionResponse.authenticated || !sessionResponse.session) {
     return { kind: 'unauthenticated' };
   }
 
-  const [statsResponse, overviewResponse, anomaliesResponse, reportsResponse] = await Promise.all([
-    fetchAdminStats(signal),
-    fetchAdminOverview(signal),
-    fetchAdminAnomalies(signal),
-    fetchAdminReports('pending', null, null, null, signal)
-  ]);
+  try {
+    const [statsResponse, overviewResponse, anomaliesResponse, reportsResponse] = await Promise.all(
+      [
+        fetchAdminStats(signal),
+        fetchAdminOverview(signal),
+        fetchAdminAnomalies(signal),
+        fetchAdminReports('pending', null, null, null, signal)
+      ]
+    );
 
-  return {
-    kind: 'ready',
-    session: sessionResponse.session,
-    stats: statsResponse,
-    overview: overviewResponse,
-    anomalies: anomaliesResponse.anomalies,
-    reports: reportsResponse.reports,
-    refreshedAt: new Date().toISOString()
-  };
+    return {
+      kind: 'ready',
+      session: sessionResponse.session,
+      stats: statsResponse,
+      overview: overviewResponse,
+      anomalies: anomaliesResponse.anomalies,
+      reports: reportsResponse.reports,
+      refreshedAt: new Date().toISOString()
+    };
+  } catch (error) {
+    if (error instanceof AdminAccessError) {
+      return { kind: 'unauthenticated', error: error.message };
+    }
+    return {
+      kind: 'error',
+      message: error instanceof Error ? error.message : 'Failed to load dashboard data.'
+    };
+  }
 }
