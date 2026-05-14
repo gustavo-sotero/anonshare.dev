@@ -239,6 +239,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Build application
+        run: bun run build
+
       - name: Setup Playwright browsers
         run: bunx playwright install chromium --with-deps
 
@@ -283,7 +286,8 @@ jobs:
 
           for _ in {1..30}; do
             if curl -fsS http://localhost:3001/health >/dev/null && \
-               curl -fsS http://localhost:3000/health >/dev/null; then
+               curl -fsS http://localhost:3000/health >/dev/null && \
+               curl -fsS http://localhost:3002/health >/dev/null; then
               echo "Stack is ready"
               exit 0
             fi
@@ -292,6 +296,7 @@ jobs:
           echo "Stack failed to start" >&2
           cat api.log || true
           cat web.log || true
+          cat worker.log || true
           exit 1
 
       - name: Run Playwright browser tests
