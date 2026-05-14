@@ -76,13 +76,12 @@ export async function uploadFile(options: {
     throw new Error(`Upload failed: HTTP ${response.status} — ${body}`);
   }
 
-  const data = (await response.json()) as {
-    shareToken: string;
-    shareUrl: string;
-    expiresAt: string;
+  const envelope = (await response.json()) as {
+    ok: true;
+    data: { shareToken: string; shareUrl: string; expiresAt: string };
   };
 
-  return data;
+  return envelope.data;
 }
 
 export async function submitShareReport(options: {

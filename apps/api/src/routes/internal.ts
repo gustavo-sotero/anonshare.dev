@@ -1,6 +1,7 @@
 import { app as appConfig, auth as authConfig } from '@anonshare/infrastructure/config';
 import { createDb } from '@anonshare/infrastructure/db';
-import { adminSessions } from '@anonshare/infrastructure/db/schema';
+import { adminSessions, files } from '@anonshare/infrastructure/db/schema';
+import { eq, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { setSignedCookie } from 'hono/cookie';
 import { ADMIN_SESSION_COOKIE_NAME } from './admin/types';
@@ -10,6 +11,43 @@ export const internalRouter = new Hono();
 
 internalRouter.post('/expire/:fileId', (c) => c.json({ error: 'not_implemented' }, 501));
 internalRouter.post('/cleanup/:fileId', (c) => c.json({ error: 'not_implemented' }, 501));
+
+/**
+ * Test-only: force-expire a file by setting its expiresAt to its uploadedAt timestamp.
+ *
+ * This makes isExpiredByTimestamp() return true immediately (expiresAt <= now),
+ * while satisfying the DB constraint (expiresAt >= uploadedAt).
+ * Guarded by APP_ENV === 'test' — absent in production.
+ */
+internalRouter.post('/test/expire/:token', async (c) => {
+  if (appConfig.env() !== 'test') {
+    return c.json({ error: 'not_found' }, 404);
+  }
+
+  const { token } = c.req.param();
+
+  let db: ReturnType<typeof createDb>;
+  try {
+    db = createDb();
+  } catch {
+    return c.json({ error: 'db_unavailable' }, 503);
+  }
+
+  // Single atomic UPDATE: set expiresAt = uploadedAt (a past timestamp that satisfies
+  // the DB constraint expiresAt >= uploadedAt). isExpiredByTimestamp() then returns true
+  // because expiresAt (= uploadedAt) <= now() for any active or expiring file.
+  const [updated] = await db
+    .update(files)
+    .set({ expiresAt: sql`${files.uploadedAt}` })
+    .where(eq(files.token, token))
+    .returning({ id: files.id });
+
+  if (!updated) {
+    return c.json({ error: 'not_found' }, 404);
+  }
+
+  return c.json({ ok: true }, 200);
+});
 
 /**
  * Test-only: create an admin session without GitHub OAuth.

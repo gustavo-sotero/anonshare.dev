@@ -18,6 +18,9 @@ test('upload → share → download happy path', async ({ page }) => {
     buffer: Buffer.from('Hello E2E world')
   });
 
+  // Trigger the upload — file selection alone does not start the upload
+  await page.getByRole('button', { name: 'Upload and generate link' }).click();
+
   // The share URL should appear after a successful upload
   const shareLink = page.locator('[data-testid="share-link"], a[href*="/share/"]').first();
   await expect(shareLink).toBeVisible({ timeout: 15_000 });
@@ -88,14 +91,20 @@ test('one-time download is consumed after first access', async ({ page }) => {
 
 /**
  * Expired file: visiting an expired share link shows an explicit expiration message.
+ *
+ * Uses the test-only POST /_internal/test/expire/:token endpoint to force-expire the
+ * file immediately, avoiding any timing dependency. This is safe because the endpoint
+ * is guarded server-side and only active when APP_ENV=test.
  */
 test('expired share link shows unavailable state', async ({ page }) => {
-  // Upload with a very short expiration
-  const { shareUrl } = await uploadFile({
+  const { shareToken, shareUrl } = await uploadFile({
     filename: 'expiring.txt',
-    content: 'Expiring soon',
-    expiresInMinutes: -1 // already expired
+    content: 'Expiring soon'
   });
+
+  // Force-expire the file via the test helper endpoint
+  const expireResponse = await page.request.post(`${API_URL}/_internal/test/expire/${shareToken}`);
+  expect(expireResponse.ok()).toBe(true);
 
   await page.goto(shareUrl);
 

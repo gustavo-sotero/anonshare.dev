@@ -1,3 +1,7 @@
 [install]
 auto-install = false
 
+[test]
+# Playwright E2E tests must only run via the Playwright runner, not bun test.
+pathIgnorePatterns = ["e2e/**"]
+
