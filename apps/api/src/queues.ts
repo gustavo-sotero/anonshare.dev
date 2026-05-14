@@ -33,7 +33,7 @@ export function getReconcileQueue(): Queue<ReconcileJobPayload> {
 /**
  * Schedule a delayed expire-file job for a file after successful activation.
  *
- * Uses jobId deduplication (`expire:{fileId}`) so a given file can only have
+ * Uses jobId deduplication (`expire-{fileId}`) so a given file can only have
  * one pending expiration job at a time. Calling this multiple times for the
  * same fileId is safe — BullMQ deduplicates by jobId.
  *
@@ -45,7 +45,7 @@ export async function enqueueExpireFileJob(fileId: string, delayMs: number): Pro
     'expire-file',
     { fileId },
     {
-      jobId: `expire:${fileId}`,
+      jobId: `expire-${fileId}`,
       delay: delayMs,
       attempts: 3,
       backoff: { type: 'exponential', delay: 5_000 },
@@ -67,7 +67,7 @@ export async function enqueueCleanupFileJob(
     'cleanup-file',
     { fileId, objectKey },
     {
-      jobId: `cleanup:${fileId}`,
+      jobId: `cleanup-${fileId}`,
       ...(delayMs > 0 ? { delay: delayMs } : {}),
       attempts: 5,
       backoff: { type: 'exponential', delay: 1_000 },

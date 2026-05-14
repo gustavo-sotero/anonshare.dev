@@ -41,7 +41,7 @@ describe('reconcile handler — Pass A: stale expirations', () => {
     expect(queues.capturedCleanupAdds).toHaveLength(1);
     expect(queues.capturedCleanupAdds?.[0]?.data.fileId).toBe('stale-1');
     expect(queues.capturedCleanupAdds?.[0]?.data.objectKey).toBe('objects/stale-1');
-    expect(queues.capturedCleanupAdds?.[0]?.opts.jobId).toBe('cleanup:stale-1');
+    expect(queues.capturedCleanupAdds?.[0]?.opts.jobId).toBe('cleanup-stale-1');
     expect(queues.capturedCleanupAdds?.[0]?.opts.removeOnComplete).toBe(
       LIFECYCLE_JOB_RETENTION.removeOnComplete
     );
@@ -83,7 +83,7 @@ describe('reconcile handler — Pass A: stale expirations', () => {
     };
     const queues: QueueStubs = {
       existingExpireJobLookupErrors: {
-        'expire:future-file': new Error('redis unavailable')
+        'expire-future-file': new Error('redis unavailable')
       }
     };
     const deps = makeMockDeps(db, {}, queues);

@@ -84,7 +84,7 @@ describe('reconcile handler — Pass B: future expiration job repair', () => {
 
     expect(queues.capturedExpireAdds).toHaveLength(1);
     expect(queues.capturedExpireAdds?.[0]?.data.fileId).toBe('future-expire');
-    expect(queues.capturedExpireAdds?.[0]?.opts.jobId).toBe('expire:future-expire');
+    expect(queues.capturedExpireAdds?.[0]?.opts.jobId).toBe('expire-future-expire');
     expect(queues.capturedExpireAdds?.[0]?.opts.removeOnComplete).toBe(
       LIFECYCLE_JOB_RETENTION.removeOnComplete
     );
@@ -159,15 +159,15 @@ describe('reconcile handler — Pass B: future expiration job repair', () => {
       selectSequence: [[], [futureFile], [], [], []]
     };
     const queues: QueueStubs = {
-      existingExpireJobStates: { 'expire:future-terminal': 'completed' }
+      existingExpireJobStates: { 'expire-future-terminal': 'completed' }
     };
     const deps = makeMockDeps(db, {}, queues);
 
     await makeHandleReconcile(deps)(makeJob());
 
-    expect(queues.capturedRemovedExpireJobIds).toEqual(['expire:future-terminal']);
+    expect(queues.capturedRemovedExpireJobIds).toEqual(['expire-future-terminal']);
     expect(queues.capturedExpireAdds).toHaveLength(1);
-    expect(queues.capturedExpireAdds?.[0]?.opts.jobId).toBe('expire:future-terminal');
+    expect(queues.capturedExpireAdds?.[0]?.opts.jobId).toBe('expire-future-terminal');
   });
 
   test('re-enqueues expire-file when existing job is terminal (failed)', async () => {
@@ -180,15 +180,15 @@ describe('reconcile handler — Pass B: future expiration job repair', () => {
       selectSequence: [[], [futureFile], [], [], []]
     };
     const queues: QueueStubs = {
-      existingExpireJobStates: { 'expire:future-terminal-failed': 'failed' }
+      existingExpireJobStates: { 'expire-future-terminal-failed': 'failed' }
     };
     const deps = makeMockDeps(db, {}, queues);
 
     await makeHandleReconcile(deps)(makeJob());
 
-    expect(queues.capturedRemovedExpireJobIds).toEqual(['expire:future-terminal-failed']);
+    expect(queues.capturedRemovedExpireJobIds).toEqual(['expire-future-terminal-failed']);
     expect(queues.capturedExpireAdds).toHaveLength(1);
-    expect(queues.capturedExpireAdds?.[0]?.opts.jobId).toBe('expire:future-terminal-failed');
+    expect(queues.capturedExpireAdds?.[0]?.opts.jobId).toBe('expire-future-terminal-failed');
   });
 
   test('does not re-enqueue expire-file when the delayed job already exists', async () => {
@@ -201,7 +201,7 @@ describe('reconcile handler — Pass B: future expiration job repair', () => {
       selectSequence: [[], [futureFile], [], [], []]
     };
     const queues: QueueStubs = {
-      existingExpireJobStates: { 'expire:future-existing': 'waiting' }
+      existingExpireJobStates: { 'expire-future-existing': 'waiting' }
     };
     const deps = makeMockDeps(db, {}, queues);
 
@@ -221,9 +221,9 @@ describe('reconcile handler — Pass B: future expiration job repair', () => {
     };
     const queuedAt = Date.now() - 20 * 60 * 1000;
     const queues: QueueStubs = {
-      existingExpireJobStates: { 'expire:future-overdue-job': 'delayed' },
-      existingExpireJobTimestamps: { 'expire:future-overdue-job': queuedAt },
-      existingExpireJobDelays: { 'expire:future-overdue-job': 0 }
+      existingExpireJobStates: { 'expire-future-overdue-job': 'delayed' },
+      existingExpireJobTimestamps: { 'expire-future-overdue-job': queuedAt },
+      existingExpireJobDelays: { 'expire-future-overdue-job': 0 }
     };
     const deps = makeMockDeps(db, {}, queues);
     const warnSpy = spyOn(logger, 'warn');

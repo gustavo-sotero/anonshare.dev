@@ -91,7 +91,7 @@ export async function runPassC(ctx: ReconcileResolvedDeps): Promise<{
       // Re-schedule expiration for promoted active records with future expiry.
       if (!promoteToExpired && file.expiresAt && file.expiresAt > now) {
         const delayMs = file.expiresAt.getTime() - Date.now();
-        const jobId = `expire:${file.id}`;
+        const jobId = `expire-${file.id}`;
         const existingJobLookup = await getLifecycleJobSafely({
           db,
           queue: expireQueue,
@@ -134,7 +134,7 @@ export async function runPassC(ctx: ReconcileResolvedDeps): Promise<{
       // If a stale pending record is already expired at promotion time,
       // enqueue cleanup immediately instead of waiting for the next cycle.
       if (promoteToExpired) {
-        const cleanupJobId = `cleanup:${file.id}`;
+        const cleanupJobId = `cleanup-${file.id}`;
         const existingCleanupJobLookup = await getLifecycleJobSafely({
           db,
           queue: cleanupQueue,

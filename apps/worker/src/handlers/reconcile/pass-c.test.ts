@@ -59,7 +59,7 @@ describe('reconcile handler — Pass B: stuck pending_upload', () => {
 
     expect(queues.capturedCleanupAdds).toHaveLength(1);
     expect(queues.capturedCleanupAdds?.[0]?.data.fileId).toBe('stuck-expired');
-    expect(queues.capturedCleanupAdds?.[0]?.opts.jobId).toBe('cleanup:stuck-expired');
+    expect(queues.capturedCleanupAdds?.[0]?.opts.jobId).toBe('cleanup-stuck-expired');
     expect(queues.capturedExpireAdds).toHaveLength(0);
   });
 
@@ -85,7 +85,7 @@ describe('reconcile handler — Pass B: stuck pending_upload', () => {
 
     expect(queues.capturedExpireAdds).toHaveLength(1);
     expect(queues.capturedExpireAdds?.[0]?.data.fileId).toBe('stuck-exp');
-    expect(queues.capturedExpireAdds?.[0]?.opts.jobId).toBe('expire:stuck-exp');
+    expect(queues.capturedExpireAdds?.[0]?.opts.jobId).toBe('expire-stuck-exp');
   });
 
   test('re-schedules expiration job when existing expire job is terminal for promoted pending file', async () => {
@@ -104,15 +104,15 @@ describe('reconcile handler — Pass B: stuck pending_upload', () => {
       existsResults: { 'objects/stuck-exp-terminal': true }
     };
     const queues: QueueStubs = {
-      existingExpireJobStates: { 'expire:stuck-exp-terminal': 'failed' }
+      existingExpireJobStates: { 'expire-stuck-exp-terminal': 'failed' }
     };
     const deps = makeMockDeps(db, storage, queues);
 
     await makeHandleReconcile(deps)(makeJob());
 
-    expect(queues.capturedRemovedExpireJobIds).toEqual(['expire:stuck-exp-terminal']);
+    expect(queues.capturedRemovedExpireJobIds).toEqual(['expire-stuck-exp-terminal']);
     expect(queues.capturedExpireAdds).toHaveLength(1);
-    expect(queues.capturedExpireAdds?.[0]?.opts.jobId).toBe('expire:stuck-exp-terminal');
+    expect(queues.capturedExpireAdds?.[0]?.opts.jobId).toBe('expire-stuck-exp-terminal');
   });
 
   test('does not re-schedule expiration when expiresAt is null', async () => {

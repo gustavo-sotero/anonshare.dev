@@ -66,7 +66,7 @@ export async function runPassB(ctx: ReconcileResolvedDeps): Promise<{
     const delayMs = file.expiresAt.getTime() - Date.now();
     if (delayMs <= 0) continue;
 
-    const jobId = `expire:${file.id}`;
+    const jobId = `expire-${file.id}`;
     const existingJobLookup = await getLifecycleJobSafely({
       db,
       queue: expireQueue,

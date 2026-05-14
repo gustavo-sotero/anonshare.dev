@@ -79,9 +79,9 @@ describe('reconcile handler — general behaviour', () => {
       selectSequence: [[], [futureFile], [], [], []]
     };
     const queues: QueueStubs = {
-      existingExpireJobStates: { 'expire:future-unreadable-job': 'waiting' },
+      existingExpireJobStates: { 'expire-future-unreadable-job': 'waiting' },
       existingExpireJobStateErrors: {
-        'expire:future-unreadable-job': new Error('state lookup failed')
+        'expire-future-unreadable-job': new Error('state lookup failed')
       }
     };
     const deps = makeMockDeps(db, {}, queues);
@@ -142,8 +142,8 @@ describe('reconcile handler — general behaviour', () => {
 
     expect(queues.capturedCleanupAdds).toHaveLength(2);
     const jobIds = queues.capturedCleanupAdds?.map((a) => a.opts.jobId);
-    expect(jobIds).toContain('cleanup:multi-1');
-    expect(jobIds).toContain('cleanup:multi-2');
+    expect(jobIds).toContain('cleanup-multi-1');
+    expect(jobIds).toContain('cleanup-multi-2');
   });
 
   test('detects duplicate pending lifecycle jobs for the same file', async () => {

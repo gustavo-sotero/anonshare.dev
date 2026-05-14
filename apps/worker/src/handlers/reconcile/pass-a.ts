@@ -54,7 +54,7 @@ export async function runPassA(
       'cleanup-file',
       { fileId: file.id, objectKey: file.objectKey },
       {
-        jobId: `cleanup:${file.id}`,
+        jobId: `cleanup-${file.id}`,
         attempts: 5,
         backoff: { type: 'exponential', delay: 1_000 },
         ...LIFECYCLE_JOB_RETENTION

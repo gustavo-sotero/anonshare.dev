@@ -88,7 +88,7 @@ export async function runPassE(ctx: ReconcileResolvedDeps): Promise<{
 
     if (!objectExists) continue;
 
-    const cleanupJobId = `cleanup:${file.id}`;
+    const cleanupJobId = `cleanup-${file.id}`;
     const existingCleanupJobLookup = await getLifecycleJobSafely({
       db,
       queue: cleanupQueue,

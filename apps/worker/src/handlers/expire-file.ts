@@ -23,7 +23,7 @@ async function enqueueCleanupJob(
     'cleanup-file',
     { fileId, objectKey },
     {
-      jobId: `cleanup:${fileId}`,
+      jobId: `cleanup-${fileId}`,
       attempts: 5,
       backoff: { type: 'exponential', delay: 1_000 },
       ...LIFECYCLE_JOB_RETENTION

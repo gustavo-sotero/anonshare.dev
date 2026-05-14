@@ -189,7 +189,7 @@ describe('expire-file handler', () => {
       await handler(makeJob('ded-789'));
 
       const opts = queue.capturedAdds?.[0]?.opts as { jobId?: string };
-      expect(opts.jobId).toBe('cleanup:ded-789');
+      expect(opts.jobId).toBe('cleanup-ded-789');
     });
 
     test('cleanup job is configured with retry, backoff, and retention policy', async () => {

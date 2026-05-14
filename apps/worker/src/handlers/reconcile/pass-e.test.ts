@@ -64,7 +64,7 @@ describe('reconcile handler — Pass E: terminal cleanup repair', () => {
 
     expect(queues.capturedCleanupAdds).toHaveLength(1);
     expect(queues.capturedCleanupAdds?.[0]?.data.fileId).toBe('consumed-terminal');
-    expect(queues.capturedCleanupAdds?.[0]?.opts.jobId).toBe('cleanup:consumed-terminal');
+    expect(queues.capturedCleanupAdds?.[0]?.opts.jobId).toBe('cleanup-consumed-terminal');
   });
 
   test('re-enqueues cleanup when existing cleanup job is terminal (failed)', async () => {
@@ -79,15 +79,15 @@ describe('reconcile handler — Pass E: terminal cleanup repair', () => {
       existsResults: { 'objects/terminal-failed-cleanup': true }
     };
     const queues: QueueStubs = {
-      existingCleanupJobStates: { 'cleanup:terminal-failed-cleanup': 'failed' }
+      existingCleanupJobStates: { 'cleanup-terminal-failed-cleanup': 'failed' }
     };
     const deps = makeMockDeps(db, storage, queues);
 
     await makeHandleReconcile(deps)(makeJob());
 
-    expect(queues.capturedRemovedCleanupJobIds).toEqual(['cleanup:terminal-failed-cleanup']);
+    expect(queues.capturedRemovedCleanupJobIds).toEqual(['cleanup-terminal-failed-cleanup']);
     expect(queues.capturedCleanupAdds).toHaveLength(1);
-    expect(queues.capturedCleanupAdds?.[0]?.opts.jobId).toBe('cleanup:terminal-failed-cleanup');
+    expect(queues.capturedCleanupAdds?.[0]?.opts.jobId).toBe('cleanup-terminal-failed-cleanup');
   });
 
   test('does not enqueue cleanup when a cleanup job already exists for the terminal file', async () => {
@@ -102,7 +102,7 @@ describe('reconcile handler — Pass E: terminal cleanup repair', () => {
       existsResults: { 'objects/terminal-existing-cleanup': true }
     };
     const queues: QueueStubs = {
-      existingCleanupJobStates: { 'cleanup:terminal-existing-cleanup': 'delayed' }
+      existingCleanupJobStates: { 'cleanup-terminal-existing-cleanup': 'delayed' }
     };
     const deps = makeMockDeps(db, storage, queues);
 
