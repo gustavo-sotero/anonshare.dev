@@ -1,14 +1,14 @@
 /**
  * Seed script for default operational settings.
  *
- * Safe to run multiple times — uses INSERT ... ON CONFLICT DO UPDATE to be
- * idempotent so the same command works for both fresh and existing databases.
+ * Safe to run multiple times — uses INSERT ... ON CONFLICT DO NOTHING so existing
+ * rows (including operator-customized values) are never overwritten. Only rows
+ * that do not yet exist are inserted with their code-defined defaults.
  *
  * Usage:
  *   bun --env-file=../../.env src/scripts/seed.ts
  */
 
-import { sql } from 'drizzle-orm';
 import { deriveLocalPlatformEnv, SYSTEM_SETTING_DEFAULTS } from '../config/index';
 import type { Db } from '../db/client';
 import { createDb } from '../db/client';
@@ -19,18 +19,22 @@ export async function seedDatabase(db: Db): Promise<void> {
   logger.info('Starting database seed', { event: 'seed_start', actor: 'worker' });
 
   for (const setting of SYSTEM_SETTING_DEFAULTS) {
-    await db
+    const result = await db
       .insert(systemSettings)
       .values({ key: setting.key, value: setting.value })
-      .onConflictDoUpdate({
-        target: systemSettings.key,
-        set: { value: sql`excluded.value`, updatedAt: sql`now()` }
-      });
+      .onConflictDoNothing({ target: systemSettings.key })
+      .returning({ key: systemSettings.key });
 
-    logger.info(`Seeded setting: ${setting.key} = ${setting.value}`, {
-      event: 'seed_setting',
-      actor: 'worker'
-    });
+    const inserted = result.length > 0;
+    logger.info(
+      `Setting: ${setting.key} — ${inserted ? `inserted default (${setting.value})` : 'already exists, skipped'}`,
+      {
+        event: 'seed_setting',
+        actor: 'worker',
+        key: setting.key,
+        inserted
+      }
+    );
   }
 
   logger.info('Database seed complete', {
