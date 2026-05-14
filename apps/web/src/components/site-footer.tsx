@@ -1,9 +1,9 @@
 import { Link } from '@tanstack/react-router';
 
 const EXTERNAL_LINKS = [
-  { label: 'Repo', href: 'https://github.com/gsotero/anonshare.dev' },
-  { label: 'GitHub', href: 'https://github.com/gsotero' },
-  { label: 'Portfólio', href: 'https://gsotero.dev' }
+  { label: 'Repo', href: 'https://github.com/gustavo-sotero/anonshare.dev' },
+  { label: 'GitHub', href: 'https://github.com/gustavo-sotero' },
+  { label: 'Portfólio', href: 'https://gustavo-sotero.dev' }
 ];
 
 const PAGE_LINKS = [
