@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
       target: tooling
       args:
-        BUN_VERSION: ${BUN_VERSION:-1.3.14}
+        BUN_VERSION: ${BUN_VERSION:-1.4.1}
     env_file:
       - .env
     environment:
@@ -27,7 +27,7 @@ services:
       dockerfile: Dockerfile
       target: tooling
       args:
-        BUN_VERSION: ${BUN_VERSION:-1.3.14}
+        BUN_VERSION: ${BUN_VERSION:-1.4.1}
     env_file:
       - .env
     environment:
@@ -49,7 +49,7 @@ services:
       dockerfile: Dockerfile
       target: web
       args:
-        BUN_VERSION: ${BUN_VERSION:-1.3.14}
+        BUN_VERSION: ${BUN_VERSION:-1.4.1}
     env_file:
       - .env
     environment:
@@ -83,7 +83,7 @@ services:
       dockerfile: Dockerfile
       target: api
       args:
-        BUN_VERSION: ${BUN_VERSION:-1.3.14}
+        BUN_VERSION: ${BUN_VERSION:-1.4.1}
     env_file:
       - .env
     environment:
@@ -116,7 +116,7 @@ services:
       dockerfile: Dockerfile
       target: worker
       args:
-        BUN_VERSION: ${BUN_VERSION:-1.3.14}
+        BUN_VERSION: ${BUN_VERSION:-1.4.1}
     env_file:
       - .env
     environment:
@@ -151,7 +151,7 @@ services:
       dockerfile: Dockerfile
       target: tooling
       args:
-        BUN_VERSION: ${BUN_VERSION:-1.3.14}
+        BUN_VERSION: ${BUN_VERSION:-1.4.1}
     env_file:
       - .env
     environment:

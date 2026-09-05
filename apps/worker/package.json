@@ -13,10 +13,10 @@
     "@anonshare/contracts": "workspace:*",
     "@anonshare/domain": "workspace:*",
     "@anonshare/infrastructure": "workspace:*",
-    "bullmq": "^5.76.6",
+    "bullmq": "^6.3.4",
     "drizzle-orm": "^0.45.2"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.14"
+    "@types/bun": "^1.4.1"
   }
 }

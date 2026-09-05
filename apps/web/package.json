@@ -13,20 +13,20 @@
     "@anonshare/contracts": "workspace:*",
     "@anonshare/domain": "workspace:*",
     "@anonshare/infrastructure": "workspace:*",
-    "@tanstack/react-router": "^1.169.2",
-    "@tanstack/react-start": "^1.167.65",
+    "@tanstack/react-router": "^1.170.32",
+    "@tanstack/react-start": "^1.168.49",
     "qrcode.react": "^4.2.0",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.2.4",
-    "@types/bun": "^1.3.14",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.1",
-    "tailwindcss": "^4.2.1",
-    "vite": "^8.0.10",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/bun": "^1.4.1",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "tailwindcss": "^4.3.3",
+    "vite": "^8.2.2",
     "vite-tsconfig-paths": "^6.1.1"
   }
 }

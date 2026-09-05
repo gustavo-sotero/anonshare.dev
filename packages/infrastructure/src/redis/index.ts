@@ -5,7 +5,19 @@ export type { Redis };
 
 type RedisProbeClient = Pick<Redis, 'disconnect' | 'ping'>;
 
-function createRedisClient(url: string, options?: RedisOptions): Redis {
+/**
+ * ioredis 6.0.0 typings regression: the constructor overloads intersect
+ * `RedisOptions` with `& { replyMapping?: ReplyMapping }`, while the exported
+ * `RedisOptions` declares `replyMapping?: ReplyMappingMode`. The intersection
+ * makes `replyMapping` incompatible, so a full `RedisOptions` object matches
+ * no overload — even though the documented `new Redis(url, options)` works
+ * at runtime. Omitting the conflicting property restores the supported
+ * constructor typing without casts. Remove this type when ioredis ships
+ * fixed constructor typings.
+ */
+type RedisClientOptions = Omit<RedisOptions, 'replyMapping'>;
+
+function createRedisClient(url: string, options?: RedisClientOptions): Redis {
   return new Redis(url, options ?? {});
 }
 

@@ -446,7 +446,7 @@ describe('POST /report/:token — happy path', () => {
     const insertedReport = capturedInsertValues[0] as { ipHash: string | null };
     expect(insertedReport).toBeDefined();
     expect(typeof insertedReport?.ipHash).toBe('string');
-    expect((insertedReport?.ipHash as string).length).toBe(32); // 32 hex chars from SHA-256 slice
+    expect(insertedReport.ipHash?.length ?? 0).toBe(32); // 32 hex chars from SHA-256 slice
   });
 });
 
